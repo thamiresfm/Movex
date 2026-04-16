@@ -94,16 +94,21 @@ jobs:
         env:
           RUST_LOG: warn
 
-      - name: Listar artefatos gerados
+      - name: Listar TODOS os artefatos gerados
         run: |
-          echo "=== Bundle macOS ==="
-          find src-tauri/target/universal-apple-darwin/release/bundle -name "*.dmg" -o -name "*.app" 2>/dev/null | head -20 || echo "Nenhum artefato encontrado"
+          echo "=== Estrutura completa do bundle ==="
+          find src-tauri/target -name "*.dmg" -o -name "*.app" -o -name "*.pkg" 2>/dev/null | head -40 || echo "Nenhum artefato encontrado"
+          echo ""
+          echo "=== Diretórios release/bundle ==="
+          find src-tauri/target -type d -name "bundle" 2>/dev/null | head -10
 
-      - name: Upload artefatos macOS (.dmg)
+      - name: Upload artefatos macOS (todos os formatos)
         uses: actions/upload-artifact@v5
         with:
           name: Movex-macOS
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/macos/*.app
           if-no-files-found: warn
           retention-days: 7
 
