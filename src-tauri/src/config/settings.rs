@@ -20,6 +20,28 @@ pub enum ScreenPosition {
     Below,
 }
 
+impl std::fmt::Display for ScreenPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Right => write!(f, "right"),
+            Self::Left  => write!(f, "left"),
+            Self::Above => write!(f, "above"),
+            Self::Below => write!(f, "below"),
+        }
+    }
+}
+
+impl From<&str> for ScreenPosition {
+    fn from(s: &str) -> Self {
+        match s {
+            "left"  => Self::Left,
+            "above" => Self::Above,
+            "below" => Self::Below,
+            _       => Self::Right,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub schema_version: u32,

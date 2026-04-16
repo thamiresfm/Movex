@@ -23,7 +23,16 @@ pub fn announce_server(hostname: &str, port: u16) -> Result<ServiceDaemon, Strin
 }
 
 /// Descobre servidores Movex na rede local (aguarda até timeout_secs)
+/// Usa spawn_blocking para não bloquear o runtime Tokio
 pub async fn discover_peers(timeout_secs: u64) -> Vec<DiscoveredPeer> {
+    tokio::task::spawn_blocking(move || {
+        discover_peers_blocking(timeout_secs)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+fn discover_peers_blocking(timeout_secs: u64) -> Vec<DiscoveredPeer> {
     let mdns = match ServiceDaemon::new() {
         Ok(d) => d,
         Err(e) => { warn!("mDNS não disponível: {}", e); return vec![]; }

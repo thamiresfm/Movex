@@ -1,9 +1,3 @@
-// Módulos implementados mas ainda não totalmente conectados ao runtime —
-// os warnings são esperados e serão removidos conforme as features forem integradas.
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 mod clipboard;
 mod config;
 mod core;
@@ -18,7 +12,7 @@ use tauri::State;
 use crate::config::{Role, Settings};
 use crate::core::state::{AppState, ConnectionStatus, SharedState};
 
-// ── Payloads IPC ─────────────────────────────────────────────────────────────
+// ── Payloads IPC ──────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize, Clone)]
 pub struct StatusPayload {
@@ -27,6 +21,7 @@ pub struct StatusPayload {
     pub peer_hostname: Option<String>,
     pub latency_ms: Option<u32>,
     pub active_screen: String,
+    pub uptime_secs: u64,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -42,7 +37,14 @@ pub struct SettingsPayload {
     pub setup_complete: bool,
 }
 
-// ── Comandos IPC ─────────────────────────────────────────────────────────────
+#[derive(serde::Serialize, Clone)]
+pub struct PeerInfo {
+    pub hostname: String,
+    pub addr: String,
+    pub port: u16,
+}
+
+// ── Comandos IPC ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, String> {
@@ -56,12 +58,17 @@ async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, Stri
         _ => (false, None, None),
     };
 
+    let uptime_secs = state.session_started_at.lock().await
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or(0);
+
     Ok(StatusPayload {
         connected,
         status_text: status.to_string(),
         peer_hostname,
         latency_ms,
         active_screen: format!("{:?}", active),
+        uptime_secs,
     })
 }
 
@@ -74,7 +81,7 @@ async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, 
         server_addr: s.server_addr.clone(),
         port: s.port,
         psk_hex: s.psk_hex.clone(),
-        peer_position: format!("{:?}", s.peer_position).to_lowercase(),
+        peer_position: s.peer_position.to_string(),
         autostart: s.autostart,
         theme: s.theme.clone(),
         setup_complete: s.setup_complete,
@@ -89,20 +96,40 @@ async fn save_settings(
     server_addr: Option<String>,
     port: u16,
     psk_hex: String,
-    _peer_position: String,
+    peer_position: String,
     autostart: bool,
     theme: String,
 ) -> Result<(), String> {
-    let mut s = state.settings.lock().await;
-    s.hostname = hostname;
-    s.role = if role == "server" { Role::Server } else { Role::Client };
-    s.server_addr = server_addr;
-    s.port = port;
-    s.psk_hex = psk_hex;
-    s.autostart = autostart;
-    s.theme = theme;
-    s.setup_complete = true;
-    s.save()
+    let autostart_changed;
+    let autostart_enable;
+    {
+        let mut s = state.settings.lock().await;
+        autostart_changed = s.autostart != autostart;
+        autostart_enable = autostart;
+        s.hostname = hostname;
+        s.role = if role == "server" { Role::Server } else { Role::Client };
+        s.server_addr = server_addr;
+        s.port = port;
+        s.psk_hex = psk_hex;
+        s.peer_position = crate::config::ScreenPosition::from(peer_position.as_ref());
+        s.autostart = autostart;
+        s.theme = theme;
+        s.setup_complete = true;
+        s.save()?;
+    }
+    // Aplicar autostart imediatamente se mudou
+    if autostart_changed {
+        if autostart_enable {
+            config::autostart::enable().unwrap_or_else(|e| {
+                tracing::warn!("Erro ao ativar autostart: {}", e)
+            });
+        } else {
+            config::autostart::disable().unwrap_or_else(|e| {
+                tracing::warn!("Erro ao desativar autostart: {}", e)
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -114,19 +141,24 @@ async fn complete_setup(state: State<'_, SharedState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn start_connection(state: State<'_, SharedState>) -> Result<(), String> {
+    // Cancelar conexão anterior se existir
+    state.cancel_connection().await;
+
     let role = { state.settings.lock().await.role.clone() };
+    let cancel = state.new_cancel_token().await;
     let state_clone = state.inner().clone();
+
     match role {
         Role::Server => {
             tokio::spawn(async move {
-                if let Err(e) = core::server::start(state_clone).await {
+                if let Err(e) = core::server::start(state_clone, cancel).await {
                     tracing::error!("Servidor encerrou com erro: {}", e);
                 }
             });
         }
         Role::Client => {
             tokio::spawn(async move {
-                core::client::connect(state_clone).await;
+                core::client::connect(state_clone, cancel).await;
             });
         }
     }
@@ -135,32 +167,37 @@ async fn start_connection(state: State<'_, SharedState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn disconnect(state: State<'_, SharedState>) -> Result<(), String> {
-    let mut status = state.connection_status.lock().await;
-    *status = ConnectionStatus::Disconnected;
-    tracing::info!("Desconectado pelo usuário");
-    Ok(())
-}
-
-/// Reseta todas as configurações para o padrão (volta ao setup wizard)
-#[tauri::command]
-async fn reset_settings(state: State<'_, SharedState>) -> Result<(), String> {
-    // Desconectar primeiro
+    // Enviar Disconnect ao peer se conectado
+    if let Some(tx) = state.message_tx.lock().await.as_ref() {
+        let _ = tx.try_send(crate::network::protocol::Message::Disconnect {
+            reason: "usuário desconectou".into(),
+        });
+    }
+    // Cancelar task de conexão
+    state.cancel_connection().await;
     {
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Disconnected;
     }
-    // Gerar novas configurações padrão (nova PSK, setup_complete = false)
+    tracing::info!("Desconectado pelo usuário");
+    Ok(())
+}
+
+#[tauri::command]
+async fn reset_settings(state: State<'_, SharedState>) -> Result<(), String> {
+    state.cancel_connection().await;
     let new_settings = Settings::default();
     new_settings.save()?;
     {
         let mut s = state.settings.lock().await;
         *s = new_settings;
     }
-    tracing::info!("Configurações resetadas — voltando ao setup wizard");
+    let mut status = state.connection_status.lock().await;
+    *status = ConnectionStatus::Disconnected;
+    tracing::info!("Configurações resetadas");
     Ok(())
 }
 
-/// Troca o papel (servidor ↔ cliente) e salva
 #[tauri::command]
 async fn set_role(state: State<'_, SharedState>, role: String) -> Result<(), String> {
     let mut s = state.settings.lock().await;
@@ -168,12 +205,52 @@ async fn set_role(state: State<'_, SharedState>, role: String) -> Result<(), Str
     s.save()
 }
 
-/// Define o endereço do servidor (modo cliente)
 #[tauri::command]
 async fn set_server_addr(state: State<'_, SharedState>, addr: Option<String>) -> Result<(), String> {
     let mut s = state.settings.lock().await;
     s.server_addr = addr;
     s.save()
+}
+
+/// Descobre servidores Movex na rede local via mDNS (timeout: 3s)
+#[tauri::command]
+async fn discover_peers() -> Result<Vec<PeerInfo>, String> {
+    let peers = tokio::task::spawn_blocking(|| {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(network::discovery::discover_peers(3))
+    })
+    .await
+    .map_err(|e| format!("Erro na descoberta: {}", e))?;
+
+    Ok(peers.into_iter().map(|p| PeerInfo {
+        hostname: p.hostname,
+        addr: p.addr,
+        port: p.port,
+    }).collect())
+}
+
+/// Conecta diretamente a um peer descoberto via mDNS
+#[tauri::command]
+async fn connect_to_peer(
+    state: State<'_, SharedState>,
+    addr: String,
+    port: u16,
+) -> Result<(), String> {
+    {
+        let mut s = state.settings.lock().await;
+        s.server_addr = Some(addr);
+        s.port = port;
+        s.role = Role::Client;
+        s.save()?;
+    }
+    // Reusar start_connection (já cancela anterior)
+    drop(state.cancel_connection().await);
+    let cancel = state.new_cancel_token().await;
+    let state_clone = state.inner().clone();
+    tokio::spawn(async move {
+        core::client::connect(state_clone, cancel).await;
+    });
+    Ok(())
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -205,6 +282,8 @@ pub fn run() {
             reset_settings,
             set_role,
             set_server_addr,
+            discover_peers,
+            connect_to_peer,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

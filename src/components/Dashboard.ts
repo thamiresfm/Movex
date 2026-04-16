@@ -8,6 +8,13 @@ interface StatusPayload {
   peer_hostname?: string;
   latency_ms?: number;
   active_screen: string;
+  uptime_secs: number;
+}
+
+interface PeerInfo {
+  hostname: string;
+  addr: string;
+  port: number;
 }
 
 interface SettingsPayload {
@@ -142,9 +149,30 @@ export async function renderDashboard(): Promise<void> {
           <!-- DISPOSITIVOS -->
           <div class="page" id="page-dispositivos">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-              <div><div class="section-title">Dispositivos</div><div class="section-sub">Máquinas na rede local</div></div>
-              <button class="btn btn-cyan">+ Adicionar</button>
+              <div>
+                <div class="section-title">Dispositivos</div>
+                <div class="section-sub" id="deviceSubtitle">Buscando na rede local...</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn btn-outline" id="btnRefreshDevices" onclick="refreshDevices()">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
+                  Atualizar
+                </button>
+                <button class="btn btn-cyan" onclick="addManualDevice()">+ Manual</button>
+              </div>
             </div>
+
+            <!-- Modal IP manual -->
+            <div id="manualModal" style="display:none;background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;padding:20px;margin-bottom:16px;">
+              <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Conectar por IP</div>
+              <div style="display:flex;gap:8px;">
+                <input id="manualIp" type="text" placeholder="192.168.1.100" style="flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                <input id="manualPort" type="number" value="24800" style="width:90px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                <button class="btn btn-cyan" onclick="connectManual()">Conectar</button>
+                <button class="btn btn-outline" onclick="document.getElementById('manualModal').style.display='none'">✕</button>
+              </div>
+            </div>
+
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;" id="deviceGrid"></div>
           </div>
 
@@ -430,6 +458,50 @@ export async function renderDashboard(): Promise<void> {
     await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
   });
 
+  // ── Descoberta mDNS ────────────────────────────────────────────────────────
+  (window as any).refreshDevices = async () => {
+    const btn = document.getElementById('btnRefreshDevices') as HTMLButtonElement;
+    const subtitle = document.getElementById('deviceSubtitle')!;
+    if (btn) { btn.disabled = true; btn.textContent = '⟳ Buscando...'; }
+    subtitle.textContent = 'Buscando na rede local (3s)...';
+    addLog("Buscando dispositivos Movex na rede...", "info");
+
+    try {
+      const peers = await invoke<PeerInfo[]>('discover_peers');
+      subtitle.textContent = `${peers.length} dispositivo(s) encontrado(s)`;
+      addLog(`Descoberta concluída: ${peers.length} peer(s)`, peers.length > 0 ? 'sec' : 'info');
+      renderDiscoveredDevices(peers);
+    } catch (e) {
+      subtitle.textContent = 'Erro na descoberta';
+      addLog(`Erro na descoberta mDNS: ${e}`, 'warn');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '↻ Atualizar'; }
+    }
+  };
+
+  (window as any).addManualDevice = () => {
+    const modal = document.getElementById('manualModal')!;
+    modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+  };
+
+  (window as any).connectManual = async () => {
+    const ip   = (document.getElementById('manualIp') as HTMLInputElement).value.trim();
+    const port = parseInt((document.getElementById('manualPort') as HTMLInputElement).value) || 24800;
+    if (!ip) { addLog("Digite um endereço IP", 'warn'); return; }
+    addLog(`Conectando manualmente a ${ip}:${port}...`, 'info');
+    await invoke('connect_to_peer', { addr: ip, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    document.getElementById('manualModal')!.style.display = 'none';
+  };
+
+  (window as any).connectToPeer = async (addr: string, port: number) => {
+    addLog(`Conectando a ${addr}:${port}...`, 'info');
+    await invoke('connect_to_peer', { addr, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+  };
+
+  // Buscar dispositivos ao abrir a aba
+  // Auto-descoberta na inicialização (não bloqueante)
+  setTimeout(() => (window as any).refreshDevices?.(), 1500);
+
   document.getElementById('cmdInput')?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     const input = e.target as HTMLInputElement;
@@ -472,8 +544,11 @@ async function updateStatus() {
 
     const uptimeEl = document.getElementById('uptimeVal');
     if (uptimeEl) {
-      const hrs = Math.floor(Date.now() / 3600000) % 999;
-      uptimeEl.innerHTML = `${hrs}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">Horas</span>`;
+      const secs = status.uptime_secs ?? 0;
+      const hrs  = Math.floor(secs / 3600);
+      const mins = Math.floor((secs % 3600) / 60);
+      const uptimeStr = hrs > 0 ? `${hrs}h ${mins}m` : secs > 0 ? `${mins}m ${secs % 60}s` : '--';
+      uptimeEl.innerHTML = `<span style="font-size:${hrs>0?'28':'22'}px">${uptimeStr}</span><span style="font-size:12px;color:var(--text-2);margin-left:4px;">uptime</span>`;
     }
 
     updateDevices(status, settings);
@@ -503,28 +578,75 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
 
 function updateDevices(status: StatusPayload, settings: SettingsPayload) {
   const grid = document.getElementById('deviceGrid');
-  if (!grid) return;
+  if (!grid || grid.dataset.discovered === 'true') return; // não sobrescrever descoberta mDNS
   const devices = [
-    { name: settings.hostname, ip: '192.168.1.1 · Local', icon: '🖥️', online: true },
-    { name: status.peer_hostname ?? 'Aguardando...', ip: '192.168.1.x', icon: '💻', online: status.connected },
+    { name: settings.hostname, ip: 'Esta máquina · Local', icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+    ...(status.peer_hostname ? [{
+      name: status.peer_hostname,
+      ip: 'Peer conectado',
+      icon: '💻',
+      online: status.connected,
+      addr: null as string|null,
+      port: 0,
+    }] : []),
   ];
-  grid.innerHTML = devices.map(d => `
-    <div style="background:var(--bg-3);border:1px solid ${d.online?'rgba(0,212,255,.2)':'var(--border)'};border-radius:14px;padding:20px;cursor:pointer;transition:all .2s;">
-      <div style="width:44px;height:44px;background:var(--bg-4);border-radius:11px;display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;">${d.icon}</div>
+  grid.innerHTML = deviceCards(devices);
+}
+
+function renderDiscoveredDevices(peers: PeerInfo[]) {
+  const grid = document.getElementById('deviceGrid');
+  if (!grid) return;
+  grid.dataset.discovered = 'true';
+
+  if (peers.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-3);">
+        <div style="font-size:32px;margin-bottom:12px;">🔍</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Nenhum servidor Movex encontrado</div>
+        <div style="font-size:12px;">Certifique-se de que o Movex está aberto e no modo Servidor no outro computador</div>
+      </div>`;
+    return;
+  }
+
+  const devices = peers.map(p => ({
+    name: p.hostname,
+    ip: `${p.addr}:${p.port}`,
+    icon: '🖥️',
+    online: true,
+    addr: p.addr,
+    port: p.port,
+  }));
+  grid.innerHTML = deviceCards(devices);
+}
+
+function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;addr:string|null;port:number}[]) {
+  return devices.map(d => `
+    <div onclick="${d.addr ? `connectToPeer('${d.addr}', ${d.port})` : ''}"
+      style="background:var(--bg-3);border:1px solid ${d.online?'rgba(0,212,255,.2)':'var(--border)'};
+             border-radius:14px;padding:20px;${d.addr?'cursor:pointer;':''}transition:all .2s;">
+      <div style="width:44px;height:44px;background:var(--bg-4);border-radius:11px;
+                  display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;">${d.icon}</div>
       <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">${d.name}</div>
       <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">${d.ip}</div>
-      <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:600;background:${d.online?'rgba(0,212,255,.12)':'rgba(255,75,110,.1)'};color:${d.online?'var(--cyan)':'var(--danger)'};">
-        <span style="width:5px;height:5px;border-radius:50%;background:currentColor;"></span>
-        ${d.online ? 'Online' : 'Offline'}
-      </span>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;
+                     font-weight:600;background:${d.online?'rgba(0,212,255,.12)':'rgba(255,75,110,.1)'};
+                     color:${d.online?'var(--cyan)':'var(--danger)'};">
+          <span style="width:5px;height:5px;border-radius:50%;background:currentColor;"></span>
+          ${d.online ? 'Online' : 'Offline'}
+        </span>
+        ${d.addr ? `<span style="font-size:10px;color:var(--cyan);font-weight:600;">Conectar →</span>` : ''}
+      </div>
     </div>
   `).join('');
 }
 
 function simulateCmd(cmd: string): string {
-  if (cmd.includes('netstat')) return 'tcp 0.0.0.0:24800 LISTEN · ESTABLISHED';
-  if (cmd.includes('ping')) return 'PING 192.168.1.x: 56 bytes · 2ms';
-  if (cmd.includes('status')) return 'Movex v0.1.0 · TLS 1.3 · Ativo';
   if (cmd === 'clear') { clearLogs(); return ''; }
-  return `Comando '${cmd}' executado.`;
+  if (cmd === 'help') return 'Comandos: clear, status';
+  if (cmd === 'status') {
+    const el = document.getElementById('pageTitle');
+    return `Movex v0.1.0 · ${el?.textContent ?? ''}`;
+  }
+  return `Comando '${cmd}': não reconhecido. Digite 'help' para ajuda.`;
 }
