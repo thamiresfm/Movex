@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Settings;
 use crate::network::protocol::Message;
 use crate::transfer::TransferProgress;
+use crate::core::stats::SessionStats;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
@@ -59,6 +60,10 @@ pub struct AppState {
     pub pending_approval: Arc<Mutex<Option<String>>>,
     /// Canal para enviar decisão de aprovação (true = aceitar, false = rejeitar)
     pub approval_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>,
+    /// Estatísticas da sessão atual
+    pub stats: Arc<SessionStats>,
+    /// Flag de modo lock (pausar transição de cursor)
+    pub lock_mode: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -74,6 +79,8 @@ impl AppState {
             next_transfer_id: Arc::new(Mutex::new(1)),
             pending_approval: Arc::new(Mutex::new(None)),
             approval_tx: Arc::new(Mutex::new(None)),
+            stats: Arc::new(SessionStats::default()),
+            lock_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

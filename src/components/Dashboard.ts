@@ -274,14 +274,14 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
 
-            <!-- SSL + Clipboard -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
+            <!-- SSL + Clipboard + Tema + Lock -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
               <div class="card" style="border-left:3px solid var(--cyan);">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
                   <div style="font-size:14px;font-weight:700;color:var(--text);">🔒 Criptografia TLS 1.3</div>
                   <label class="toggle"><input type="checkbox" checked disabled /><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
                 </div>
-                <div style="font-size:11px;color:var(--text-2);line-height:1.5;margin-bottom:10px;">Sempre ativa. Todos os dados são protegidos com AES-256.</div>
+                <div style="font-size:11px;color:var(--text-2);line-height:1.5;margin-bottom:10px;">Sempre ativa. AES-256 em todos os dados.</div>
                 <div style="display:flex;gap:6px;">
                   <span style="padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">AES-256</span>
                   <span style="padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">TLS 1.3</span>
@@ -292,7 +292,58 @@ export async function renderDashboard(): Promise<void> {
                   <div style="font-size:14px;font-weight:700;color:var(--text);">📋 Clipboard Compartilhado</div>
                   <label class="toggle"><input type="checkbox" checked id="clipboardToggle"/><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
                 </div>
-                <div style="font-size:11px;color:var(--text-2);line-height:1.5;">Copie em um computador e cole no outro automaticamente.</div>
+                <div style="font-size:11px;color:var(--text-2);line-height:1.5;">Copie em um computador e cole no outro.</div>
+              </div>
+            </div>
+
+            <!-- Preferências -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+              <!-- Tema -->
+              <div class="card">
+                <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;">🎨 Tema</div>
+                <div style="display:flex;gap:8px;">
+                  <button id="themeDark" onclick="setTheme('dark')" style="flex:1;padding:8px;border-radius:8px;border:2px solid var(--cyan);background:var(--bg-2);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;">🌙 Escuro</button>
+                  <button id="themeLight" onclick="setTheme('light')" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;">☀️ Claro</button>
+                </div>
+              </div>
+              <!-- Modo Lock -->
+              <div class="card">
+                <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;">🔐 Modo Lock</div>
+                <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;">Pausa a transição de cursor entre telas</div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <button id="btnLockMode" onclick="toggleLockMode()" class="btn btn-outline" style="flex:1;">
+                    🔓 Desbloqueado
+                  </button>
+                  <div style="font-size:10px;color:var(--text-3);">Atalho:<br><code id="lockKeyDisplay" style="color:var(--cyan);">Ctrl+Alt+L</code></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Notificações + Atalho -->
+            <div class="card" style="margin-bottom:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <div>
+                  <div style="font-size:13px;font-weight:600;color:var(--text);">🔔 Notificações do Sistema</div>
+                  <div style="font-size:11px;color:var(--text-3);">Avisos ao conectar, desconectar e receber arquivos</div>
+                </div>
+                <label class="toggle"><input type="checkbox" id="notifToggle" checked /><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+                <div style="font-size:12px;font-weight:600;color:var(--text);flex-shrink:0;">Atalho Lock:</div>
+                <input id="lockKeyInput" type="text" value="ctrl+alt+l"
+                  style="flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--cyan);outline:none;" />
+                <div style="font-size:10px;color:var(--text-3);">ex: ctrl+alt+l</div>
+              </div>
+            </div>
+
+            <!-- Peers recentes -->
+            <div class="card" style="margin-bottom:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <div style="font-size:13px;font-weight:600;color:var(--text);">🕐 Conexões Recentes</div>
+                <button onclick="clearHistory()" class="btn btn-outline" style="font-size:10px;padding:4px 10px;">Limpar</button>
+              </div>
+              <div id="recentPeersList" style="display:flex;flex-direction:column;gap:6px;">
+                <div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>
               </div>
             </div>
 
@@ -612,6 +663,118 @@ export async function renderDashboard(): Promise<void> {
     addLog('Desconectado.', 'info');
   };
 
+  // ── Tema claro/escuro ──────────────────────────────────────────────────────
+  (window as any).setTheme = async (theme: string) => {
+    const { applyTheme } = await import('../main');
+    applyTheme(theme);
+    const dark = document.getElementById('themeDark')!;
+    const light = document.getElementById('themeLight')!;
+    dark.style.borderColor  = theme === 'dark'  ? 'var(--cyan)' : 'var(--border)';
+    dark.style.color        = theme === 'dark'  ? 'var(--text)' : 'var(--text-2)';
+    light.style.borderColor = theme === 'light' ? 'var(--cyan)' : 'var(--border)';
+    light.style.color       = theme === 'light' ? 'var(--text)' : 'var(--text-2)';
+    await invoke('update_preferences', {
+      notificationsEnabled: (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? true,
+      lockKey: (document.getElementById('lockKeyInput') as HTMLInputElement)?.value ?? 'ctrl+alt+l',
+      theme,
+    }).catch(console.warn);
+    addLog(`Tema alterado: ${theme}`, 'info');
+  };
+
+  // ── Modo Lock ──────────────────────────────────────────────────────────────
+  (window as any).toggleLockMode = async () => {
+    const active = await invoke<boolean>('toggle_lock').catch(() => false);
+    const btn = document.getElementById('btnLockMode')!;
+    btn.textContent = active ? '🔒 Bloqueado' : '🔓 Desbloqueado';
+    btn.style.background = active ? 'rgba(245,166,35,.15)' : '';
+    btn.style.borderColor = active ? 'var(--warn)' : '';
+    btn.style.color = active ? 'var(--warn)' : '';
+    addLog(`Modo lock: ${active ? 'ATIVO' : 'inativo'}`, active ? 'warn' : 'info');
+  };
+
+  // ── Histórico de conexões ──────────────────────────────────────────────────
+  const loadRecentPeers = async () => {
+    try {
+      const peers = await invoke<any[]>('get_recent_peers');
+      const list = document.getElementById('recentPeersList')!;
+      if (!peers || peers.length === 0) {
+        list.innerHTML = '<div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>';
+        return;
+      }
+      list.innerHTML = peers.map(p => {
+        const date = new Date(p.last_connected * 1000).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+        return `
+          <div onclick="connectToPeer('${p.addr}', ${p.port})" style="
+            display:flex;align-items:center;justify-content:space-between;
+            padding:8px 12px;background:var(--bg-2);border-radius:8px;
+            cursor:pointer;border:1px solid var(--border);transition:border-color .15s;
+          " onmouseover="this.style.borderColor='var(--border-c)'" onmouseout="this.style.borderColor='var(--border)'">
+            <div>
+              <div style="font-size:13px;font-weight:600;color:var(--text);">${p.hostname}</div>
+              <div style="font-size:10px;color:var(--text-3);">${p.addr}:${p.port}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:10px;color:var(--text-3);">${date}</div>
+              <div style="font-size:10px;color:var(--cyan);margin-top:2px;">Conectar →</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch { /* fora do Tauri */ }
+  };
+
+  (window as any).clearHistory = async () => {
+    await invoke('clear_recent_peers').catch(console.warn);
+    loadRecentPeers();
+    addLog('Histórico de conexões limpo.', 'info');
+  };
+
+  // Carregar peers recentes ao abrir configurações
+  const origNavTo = (window as any).navTo;
+  (window as any).navTo = (page: string, el: HTMLElement) => {
+    origNavTo?.(page, el);
+    if (page === 'configuracoes') {
+      loadRecentPeers();
+      updateLockButton();
+      updateThemeButtons();
+    }
+  };
+
+  const updateLockButton = async () => {
+    try {
+      const s = await invoke<any>('get_settings');
+      const btn = document.getElementById('btnLockMode');
+      if (btn) {
+        const locked = s.lock_mode ?? false;
+        btn.textContent = locked ? '🔒 Bloqueado' : '🔓 Desbloqueado';
+        (btn as HTMLButtonElement).style.background = locked ? 'rgba(245,166,35,.15)' : '';
+        (btn as HTMLButtonElement).style.borderColor = locked ? 'var(--warn)' : '';
+        (btn as HTMLButtonElement).style.color = locked ? 'var(--warn)' : '';
+      }
+      const lockKeyEl = document.getElementById('lockKeyDisplay');
+      const lockKeyInput = document.getElementById('lockKeyInput') as HTMLInputElement;
+      if (lockKeyEl) lockKeyEl.textContent = s.lock_key ?? 'ctrl+alt+l';
+      if (lockKeyInput) lockKeyInput.value = s.lock_key ?? 'ctrl+alt+l';
+      const notifEl = document.getElementById('notifToggle') as HTMLInputElement;
+      if (notifEl) notifEl.checked = s.notifications_enabled ?? true;
+    } catch { /* fora do Tauri */ }
+  };
+
+  const updateThemeButtons = async () => {
+    try {
+      const s = await invoke<any>('get_settings');
+      const theme = s.theme ?? 'dark';
+      const dark  = document.getElementById('themeDark')  as HTMLButtonElement;
+      const light = document.getElementById('themeLight') as HTMLButtonElement;
+      if (dark && light) {
+        dark.style.borderColor  = theme === 'dark'  ? 'var(--cyan)' : 'var(--border)';
+        dark.style.color        = theme === 'dark'  ? 'var(--text)' : 'var(--text-2)';
+        light.style.borderColor = theme === 'light' ? 'var(--cyan)' : 'var(--border)';
+        light.style.color       = theme === 'light' ? 'var(--text)' : 'var(--text-2)';
+      }
+    } catch { /* fora do Tauri */ }
+  };
+
   // ── Descoberta mDNS ────────────────────────────────────────────────────────
   (window as any).refreshDevices = async () => {
     const btn = document.getElementById('btnRefreshDevices') as HTMLButtonElement;
@@ -710,6 +873,24 @@ async function updateStatus() {
     }
 
     updateDevices(status, settings);
+
+    // Estatísticas reais
+    try {
+      const stats = await invoke<any>('get_stats');
+      const bytes = (n: number) => {
+        if (n >= 1073741824) return `${(n/1073741824).toFixed(1)} GB`;
+        if (n >= 1048576)    return `${(n/1048576).toFixed(1)} MB`;
+        if (n >= 1024)       return `${(n/1024).toFixed(0)} KB`;
+        return `${n} B`;
+      };
+      const totalBytes = (stats.bytes_sent ?? 0) + (stats.bytes_received ?? 0);
+      const nodesEl = document.getElementById('nodesLabel');
+      if (nodesEl && status.connected) {
+        nodesEl.textContent = `2 Nós Conectados · ${bytes(totalBytes)} transferidos`;
+      }
+      const netEl = document.querySelector('#page-painel .stat-value-net') as HTMLElement;
+      if (netEl) netEl.textContent = bytes(totalBytes);
+    } catch { /* sem stats */ }
 
     // Botão conectar/desconectar
     const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;

@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
+use crate::core::stats::get_primary_screen_size;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::transport::{
     create_tls_acceptor, generate_self_signed_cert, recv_message, send_message,
@@ -199,6 +200,12 @@ async fn handle_client<S>(
     }).await;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
+    // Adicionar ao histórico de peers recentes
+    {
+        let mut s = state.settings.lock().await;
+        s.add_recent_peer(&peer_hostname, &peer_addr.ip().to_string(), peer_addr.port());
+        let _ = s.save();
+    }
     {
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Connected {
@@ -223,8 +230,9 @@ async fn handle_client<S>(
             _                                    => PeerPosition::Right,
         }
     };
+    let (screen_w, screen_h) = get_primary_screen_size();
     let layout = ScreenLayout {
-        local: ScreenResolution { width: 1920, height: 1080, scale_factor: 1.0 },
+        local: ScreenResolution { width: screen_w, height: screen_h, scale_factor: 1.0 },
         peer: None,
         peer_position,
     };
@@ -259,14 +267,18 @@ async fn handle_client<S>(
             }
         }
 
-        // Só enviar evento ao cliente se o cursor estiver na tela remota
-        let is_remote = state_for_capture.active_screen
+        // Verificar modo lock — bloquear transição
+        let locked = state_for_capture.lock_mode.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Só enviar evento ao cliente se o cursor estiver na tela remota e lock desativado
+        let is_remote = !locked && state_for_capture.active_screen
             .try_lock()
             .map(|s| *s == ActiveScreen::Remote)
-            .unwrap_or(false); // se não conseguir o lock, assume local (seguro)
+            .unwrap_or(false);
 
         if is_remote {
             let _ = msg_tx_for_capture.try_send(Message::Input(event));
+            state_for_capture.stats.inc_event_sent();
         }
     }));
 
@@ -351,8 +363,9 @@ async fn handle_client<S>(
                     Ok(Message::FileEnd { id, checksum }) => {
                         if let Some(ref mut recv) = file_receiver {
                             match recv.on_file_end(id, checksum).await {
-                                Ok((name, path)) => {
-                                    info!("Arquivo recebido: '{}' → {:?}", name, path);
+                                Ok((name, _path)) => {
+                                    info!("Arquivo recebido: '{}'", name);
+                                    state.stats.inc_file_received();
                                 }
                                 Err(e) => {
                                     warn!("FileEnd error: {}", e);
