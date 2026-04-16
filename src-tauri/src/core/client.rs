@@ -53,15 +53,25 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             (s.hostname.clone(), s.psk_hex.clone())
                         };
 
-                        // Enviar Hello com nonce que inclui derivação da PSK
-                        let nonce = hex::encode(rand::random::<[u8; 16]>());
-                        let hmac = compute_hmac(&psk_hex, &nonce);
+                        // 1. Receber ServerChallenge com nonce
+                        let challenge = match recv_message(&mut tls).await {
+                            Ok(Message::ServerChallenge { version, server_nonce, .. }) => {
+                                if version != PROTOCOL_VERSION {
+                                    warn!("Versão incompatível do servidor");
+                                    continue;
+                                }
+                                server_nonce
+                            }
+                            Ok(_) => { warn!("Esperava ServerChallenge"); continue; }
+                            Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); continue; }
+                        };
 
-                        // Reutilizar o campo nonce para enviar o HMAC (compatível com servidor)
+                        // 2. Computar HMAC(psk, server_nonce) e enviar Hello
+                        let hmac = crate::core::auth::compute_hmac(&psk_hex, &challenge);
                         let hello = Message::Hello {
                             version: PROTOCOL_VERSION,
                             hostname,
-                            nonce: hmac,
+                            hmac,
                         };
 
                         if let Err(e) = send_message(&mut tls, &hello).await {
@@ -280,11 +290,3 @@ async fn run_session<S>(
     *started = None;
 }
 
-fn compute_hmac(psk_hex: &str, nonce: &str) -> String {
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(psk_hex.as_bytes());
-    hasher.update(b":");
-    hasher.update(nonce.as_bytes());
-    hex::encode(hasher.finalize())
-}

@@ -55,6 +55,9 @@ async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, Stri
         ConnectionStatus::Connected { peer_hostname, latency_ms } => {
             (true, Some(peer_hostname.clone()), Some(*latency_ms))
         }
+        ConnectionStatus::PendingApproval { peer_hostname } => {
+            (false, Some(peer_hostname.clone()), None)
+        }
         _ => (false, None, None),
     };
 
@@ -213,15 +216,10 @@ async fn set_server_addr(state: State<'_, SharedState>, addr: Option<String>) ->
 }
 
 /// Descobre servidores Movex na rede local via mDNS (timeout: 3s)
+/// usa spawn_blocking porque discover_peers internamente faz I/O síncrono
 #[tauri::command]
 async fn discover_peers() -> Result<Vec<PeerInfo>, String> {
-    let peers = tokio::task::spawn_blocking(|| {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(network::discovery::discover_peers(3))
-    })
-    .await
-    .map_err(|e| format!("Erro na descoberta: {}", e))?;
-
+    let peers = network::discovery::discover_peers(3).await;
     Ok(peers.into_iter().map(|p| PeerInfo {
         hostname: p.hostname,
         addr: p.addr,

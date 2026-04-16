@@ -7,8 +7,11 @@ pub const MAGIC: [u8; 4] = [0x46, 0x4C, 0x4F, 0x57]; // "FLOW"
 #[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub enum Message {
     // Handshake
-    Hello { version: u32, hostname: String, nonce: String },
-    HelloAck { version: u32, hostname: String, nonce: String },
+    /// Servidor envia primeiro: versão + nonce aleatório para o cliente computar HMAC
+    ServerChallenge { version: u32, hostname: String, server_nonce: String },
+    /// Cliente responde: hostname + HMAC(psk, server_nonce)
+    Hello { version: u32, hostname: String, hmac: String },
+    HelloAck { version: u32, hostname: String },
     HelloReject { reason: String },
 
     // Input
@@ -121,7 +124,7 @@ mod tests {
         let msg = Message::Hello {
             version: PROTOCOL_VERSION,
             hostname: "Estação Principal".to_string(),
-            nonce: "abc123".to_string(),
+            hmac: "deadbeef".to_string(),
         };
         let bytes = msg.encode().unwrap();
         let decoded = Message::decode(&bytes[8..]).unwrap();

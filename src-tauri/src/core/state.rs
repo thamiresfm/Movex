@@ -10,6 +10,8 @@ use crate::transfer::TransferProgress;
 pub enum ConnectionStatus {
     Disconnected,
     Connecting,
+    /// Handshake TLS em andamento — aguardando aprovação do usuário
+    PendingApproval { peer_hostname: String },
     Connected { peer_hostname: String, latency_ms: u32 },
     Reconnecting { attempt: u32 },
 }
@@ -19,6 +21,9 @@ impl std::fmt::Display for ConnectionStatus {
         match self {
             Self::Disconnected => write!(f, "Desconectado"),
             Self::Connecting => write!(f, "Conectando..."),
+            Self::PendingApproval { peer_hostname } => {
+                write!(f, "Aguardando aprovação de {}", peer_hostname)
+            }
             Self::Connected { peer_hostname, latency_ms } => {
                 write!(f, "Conectado a {} ({}ms)", peer_hostname, latency_ms)
             }

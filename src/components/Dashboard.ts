@@ -398,12 +398,16 @@ export async function renderDashboard(): Promise<void> {
     approvalSeconds = 60;
     countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
     if (approvalCountdownTimer) clearInterval(approvalCountdownTimer);
-    approvalCountdownTimer = setInterval(() => {
+    approvalCountdownTimer = setInterval(async () => {
       approvalSeconds--;
       countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
       if (approvalSeconds <= 0) {
         clearInterval(approvalCountdownTimer!);
+        approvalCountdownTimer = null;
         hideApprovalModal();
+        // Rejeitar no backend quando o countdown esgota
+        await invoke('reject_connection').catch(() => {});
+        addLog('Conexão recusada automaticamente (timeout)', 'warn');
       }
     }, 1000);
   };
@@ -675,16 +679,7 @@ export async function renderDashboard(): Promise<void> {
     input.value = '';
   });
 
-  // Auto-log periódico
-  setInterval(() => {
-    const msgs: [string, string][] = [
-      ['Heartbeat: todos os nós respondendo.', 'info'],
-      ['Chave de sessão renovada.', 'sec'],
-      ['Latência média: 3ms.', 'info'],
-    ];
-    const m = msgs[Math.floor(Math.random() * msgs.length)];
-    addLog(m[0], m[1]);
-  }, 10000);
+  // Sem logs falsos — apenas logs reais do backend
 }
 
 async function updateStatus() {

@@ -50,13 +50,19 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                 match result {
                     Ok((tcp_stream, peer_addr)) => {
                         // Já há cliente conectado? Rejeitar.
-                        let already_connected = matches!(
+                        // Bloquear nova conexão se já há uma ativa ou em aprovação
+                        let busy = matches!(
                             *state.connection_status.lock().await,
-                            ConnectionStatus::Connected { .. }
+                            ConnectionStatus::Connected { .. } | ConnectionStatus::PendingApproval { .. }
                         );
-                        if already_connected {
-                            warn!("Rejeitando nova conexão de {} — já há cliente conectado", peer_addr);
+                        if busy {
+                            warn!("Rejeitando nova conexão de {} — já há cliente conectado ou aprovação pendente", peer_addr);
                             continue;
+                        }
+                        // Marcar como PendingApproval atomicamente para evitar race condition
+                        {
+                            let mut status = state.connection_status.lock().await;
+                            *status = ConnectionStatus::PendingApproval { peer_hostname: peer_addr.to_string() };
                         }
 
                         info!("Nova conexão TCP de {}", peer_addr);
@@ -92,33 +98,46 @@ async fn handle_client<S>(
 ) where
     S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin + Send + 'static,
 {
-    // ── Handshake com validação de PSK ──────────────────────────────────────
+    // ── Handshake com PSK correta ────────────────────────────────────────────
+    // 1. Servidor envia ServerChallenge com nonce aleatório
+    let server_nonce = hex::encode(rand::random::<[u8; 32]>());
+    let our_hostname_for_challenge = { state.settings.lock().await.hostname.clone() };
+    if let Err(e) = send_message(&mut stream, &Message::ServerChallenge {
+        version: PROTOCOL_VERSION,
+        hostname: our_hostname_for_challenge,
+        server_nonce: server_nonce.clone(),
+    }).await {
+        warn!("Erro ao enviar ServerChallenge para {}: {}", peer_addr, e);
+        return;
+    }
+
+    // 2. Receber Hello com HMAC do cliente
     let hello = match recv_message(&mut stream).await {
         Ok(m) => m,
         Err(e) => { warn!("Erro ao receber Hello de {}: {}", peer_addr, e); return; }
     };
 
-    let (peer_hostname, client_nonce) = match hello {
-        Message::Hello { version, hostname, nonce } => {
+    let peer_hostname = match hello {
+        Message::Hello { version, hostname, hmac } => {
             if version != PROTOCOL_VERSION {
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
                 }).await;
                 return;
             }
-            (hostname, nonce)
+            // 3. Validar HMAC
+            let psk_hex = { state.settings.lock().await.psk_hex.clone() };
+            if !crate::core::auth::verify_hmac(&psk_hex, &server_nonce, &hmac) {
+                warn!("PSK incorreta de {} — rejeitando conexão", peer_addr);
+                let _ = send_message(&mut stream, &Message::HelloReject {
+                    reason: "Chave de segurança incorreta".to_string(),
+                }).await;
+                return;
+            }
+            hostname
         }
         _ => { warn!("Esperava Hello de {}", peer_addr); return; }
     };
-
-    // Validar PSK: cliente deve enviar HMAC-SHA256(psk, nonce)
-    let psk_hex = { state.settings.lock().await.psk_hex.clone() };
-    let expected_hmac = compute_hmac(&psk_hex, &client_nonce);
-    if client_nonce != expected_hmac {
-        // Na versão de desenvolvimento, só logar o aviso (não rejeitar)
-        // Em produção: rejeitar com HelloReject
-        warn!("PSK não verificada para {} — permitindo (modo dev)", peer_addr);
-    }
 
     // ── Solicitar aprovação do usuário ──────────────────────────────────────
     let our_hostname = { state.settings.lock().await.hostname.clone() };
@@ -173,11 +192,10 @@ async fn handle_client<S>(
         }
     }
 
-    // Agora enviar HelloAck
+    // Enviar HelloAck — conexão estabelecida
     let _ = send_message(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,
         hostname: our_hostname,
-        nonce: hex::encode(rand::random::<[u8; 16]>()),
     }).await;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
@@ -241,12 +259,15 @@ async fn handle_client<S>(
             }
         }
 
-        // Se cursor está no lado remoto, enviar evento ao cliente
-        let is_remote = {
-            // check síncrono via try_lock
-            true // simplificado — o estado correto é checado no select abaixo
-        };
-        let _ = msg_tx_for_capture.try_send(Message::Input(event));
+        // Só enviar evento ao cliente se o cursor estiver na tela remota
+        let is_remote = state_for_capture.active_screen
+            .try_lock()
+            .map(|s| *s == ActiveScreen::Remote)
+            .unwrap_or(false); // se não conseguir o lock, assume local (seguro)
+
+        if is_remote {
+            let _ = msg_tx_for_capture.try_send(Message::Input(event));
+        }
     }));
 
     if let Err(e) = capture_result {
@@ -361,12 +382,3 @@ async fn handle_client<S>(
     info!("Conexão com {} encerrada", peer_addr);
 }
 
-/// Computa HMAC-SHA256(psk_hex, nonce) como hex — usado para autenticação
-fn compute_hmac(psk_hex: &str, nonce: &str) -> String {
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(psk_hex.as_bytes());
-    hasher.update(b":");
-    hasher.update(nonce.as_bytes());
-    hex::encode(hasher.finalize())
-}

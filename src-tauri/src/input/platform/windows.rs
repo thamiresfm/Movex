@@ -1,9 +1,30 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{error, info};
 
 use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
+
+// Callback global para os hooks Win32 (SetWindowsHookEx exige funções estáticas)
+// OnceLock garante inicialização thread-safe e acesso sem alocação por evento
+type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync + 'static>;
+static HOOK_CB: OnceLock<Mutex<Option<Arc<HookCallback>>>> = OnceLock::new();
+
+fn get_hook_cb() -> &'static Mutex<Option<Arc<HookCallback>>> {
+    HOOK_CB.get_or_init(|| Mutex::new(None))
+}
+
+fn set_hook_cb(cb: Option<Arc<HookCallback>>) {
+    *get_hook_cb().lock().unwrap() = cb;
+}
+
+fn call_hook_cb(event: InputEvent) {
+    if let Ok(guard) = get_hook_cb().lock() {
+        if let Some(cb) = guard.as_ref() {
+            cb(event);
+        }
+    }
+}
 
 // ── Captura via SetWindowsHookEx ─────────────────────────────────────────────
 
@@ -25,32 +46,23 @@ impl InputCapture for WindowsCapture {
 
         let running = Arc::clone(&self.running);
 
+        // Registrar callback no static global antes de spawnar a thread
+        set_hook_cb(Some(Arc::new(callback)));
+
         std::thread::spawn(move || {
             use windows::Win32::UI::WindowsAndMessaging::{
-                SetWindowsHookExW, UnhookWindowsHookEx, GetMessageW,
-                HHOOK, WH_MOUSE_LL, WH_KEYBOARD_LL, MSG,
-                LLMHOOKSTRUCT, LLKHOOKSTRUCT,
+                SetWindowsHookExW, UnhookWindowsHookEx,
+                WH_MOUSE_LL, WH_KEYBOARD_LL, MSG,
                 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
                 WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL,
                 WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
-                HC_ACTION, KBDLLHOOKSTRUCT,
+                HC_ACTION,
             };
-            use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT, HWND};
+            use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             use windows::Win32::UI::Input::KeyboardAndMouse::{
                 VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN,
             };
-
-            let callback = Arc::new(Mutex::new(callback));
-
-            // Armazenar callback em thread-local para o hook Win32
-            thread_local! {
-                static HOOK_CB: Mutex<Option<Arc<Mutex<Box<dyn Fn(InputEvent) + Send + Sync + 'static>>>>> = Mutex::new(None);
-            }
-
-            HOOK_CB.with(|cb| {
-                *cb.lock().unwrap() = Some(Arc::clone(&callback));
-            });
 
             unsafe extern "system" fn mouse_proc(
                 n_code: i32,
@@ -92,13 +104,7 @@ impl InputCapture for WindowsCapture {
                     };
 
                     if let Some(ev) = event {
-                        HOOK_CB.with(|cb| {
-                            if let Some(arc) = cb.lock().unwrap().as_ref() {
-                                if let Ok(f) = arc.lock() {
-                                    f(ev);
-                                }
-                            }
-                        });
+                        call_hook_cb(ev); // usa static global em vez de thread_local
                     }
                 }
                 CallNextHookEx(None, n_code, w_param, l_param)
@@ -111,39 +117,26 @@ impl InputCapture for WindowsCapture {
             ) -> LRESULT {
                 use windows::Win32::UI::WindowsAndMessaging::{
                     CallNextHookEx, KBDLLHOOKSTRUCT,
-                    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+                    WM_KEYDOWN, WM_SYSKEYDOWN,
                 };
 
                 if n_code == HC_ACTION as i32 {
                     let data = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
-                    let pressed = matches!(
-                        w_param.0 as u32,
-                        v if v == WM_KEYDOWN.0 || v == WM_SYSKEYDOWN.0
-                    );
+                    let vk = w_param.0 as u32;
+                    let pressed = vk == WM_KEYDOWN.0 || vk == WM_SYSKEYDOWN.0;
 
-                    // Ler estado dos modificadores
                     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
                     let mut mods = Modifiers::NONE;
-                    if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
+                    if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0   { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
                     if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                    if GetAsyncKeyState(VK_MENU.0 as i32) < 0 { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                    if GetAsyncKeyState(VK_MENU.0 as i32) < 0    { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
                     if GetAsyncKeyState(VK_LWIN.0 as i32) < 0
-                    || GetAsyncKeyState(VK_RWIN.0 as i32) < 0 {
-                        mods = Modifiers(mods.0 | Modifiers::META.0);
-                    }
+                    || GetAsyncKeyState(VK_RWIN.0 as i32) < 0    { mods = Modifiers(mods.0 | Modifiers::META.0); }
 
-                    let ev = InputEvent::KeyEvent {
+                    call_hook_cb(InputEvent::KeyEvent {
                         keycode: data.vkCode,
                         pressed,
                         modifiers: mods,
-                    };
-
-                    HOOK_CB.with(|cb| {
-                        if let Some(arc) = cb.lock().unwrap().as_ref() {
-                            if let Ok(f) = arc.lock() {
-                                f(ev);
-                            }
-                        }
                     });
                 }
                 CallNextHookEx(None, n_code, w_param, l_param)
@@ -183,6 +176,7 @@ impl InputCapture for WindowsCapture {
 
     fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
+        set_hook_cb(None); // limpar callback global
     }
 
     fn lock_cursor(&self) {
