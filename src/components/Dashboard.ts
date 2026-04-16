@@ -465,6 +465,9 @@ export async function renderDashboard(): Promise<void> {
   document.getElementById('btnConnect')?.addEventListener('click', async () => {
     addLog("Iniciando conexão...", "info");
     await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    // Garantir que estamos no Painel
+    const navEl = document.getElementById('nav-painel');
+    if (navEl) (window as any).navTo('painel', navEl);
   });
 
   // ── Transferência de arquivos ───────────────────────────────────────────────
@@ -516,23 +519,36 @@ export async function renderDashboard(): Promise<void> {
     modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
   };
 
+  const goToPainel = () => {
+    const navEl = document.getElementById('nav-painel');
+    if (navEl) (window as any).navTo('painel', navEl);
+  };
+
   (window as any).connectManual = async () => {
     const ip   = (document.getElementById('manualIp') as HTMLInputElement).value.trim();
     const port = parseInt((document.getElementById('manualPort') as HTMLInputElement).value) || 24800;
     if (!ip) { addLog("Digite um endereço IP", 'warn'); return; }
-    addLog(`Conectando manualmente a ${ip}:${port}...`, 'info');
-    await invoke('connect_to_peer', { addr: ip, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    addLog(`Conectando a ${ip}:${port}...`, 'info');
     document.getElementById('manualModal')!.style.display = 'none';
+    await invoke('connect_to_peer', { addr: ip, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    goToPainel(); // voltar ao Painel após conectar
   };
 
   (window as any).connectToPeer = async (addr: string, port: number) => {
     addLog(`Conectando a ${addr}:${port}...`, 'info');
     await invoke('connect_to_peer', { addr, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    goToPainel(); // voltar ao Painel após conectar
   };
 
-  // Buscar dispositivos ao abrir a aba
-  // Auto-descoberta na inicialização (não bloqueante)
-  setTimeout(() => (window as any).refreshDevices?.(), 1500);
+  // Auto-descoberta apenas se a aba Dispositivos estiver visível e não conectado
+  setTimeout(async () => {
+    try {
+      const status = await invoke<StatusPayload>('get_status');
+      if (!status.connected) {
+        (window as any).refreshDevices?.();
+      }
+    } catch { /* fora do Tauri */ }
+  }, 1500);
 
   document.getElementById('cmdInput')?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
@@ -641,17 +657,34 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
 
 function updateDevices(status: StatusPayload, settings: SettingsPayload) {
   const grid = document.getElementById('deviceGrid');
-  if (!grid || grid.dataset.discovered === 'true') return; // não sobrescrever descoberta mDNS
+  if (!grid) return;
+
+  // Se conectado: sempre mostrar as máquinas reais (ignora descoberta anterior)
+  if (status.connected) {
+    grid.dataset.discovered = 'false'; // permite atualizar
+    const devices = [
+      { name: settings.hostname, ip: 'Esta máquina · Local', icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+      {
+        name: status.peer_hostname ?? 'Peer',
+        ip: '● Conectado agora',
+        icon: '💻',
+        online: true,
+        addr: null as string|null,
+        port: 0,
+      },
+    ];
+    grid.innerHTML = deviceCards(devices);
+    const subtitle = document.getElementById('deviceSubtitle');
+    if (subtitle) subtitle.textContent = `Conectado a ${status.peer_hostname ?? 'peer'}`;
+    return;
+  }
+
+  // Se não conectado e grid já foi preenchida pela descoberta mDNS, não sobrescrever
+  if (grid.dataset.discovered === 'true') return;
+
+  // Mostrar apenas a máquina local enquanto desconectado
   const devices = [
     { name: settings.hostname, ip: 'Esta máquina · Local', icon: '🖥️', online: true, addr: null as string|null, port: 0 },
-    ...(status.peer_hostname ? [{
-      name: status.peer_hostname,
-      ip: 'Peer conectado',
-      icon: '💻',
-      online: status.connected,
-      addr: null as string|null,
-      port: 0,
-    }] : []),
   ];
   grid.innerHTML = deviceCards(devices);
 }
@@ -659,7 +692,8 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
 function renderDiscoveredDevices(peers: PeerInfo[]) {
   const grid = document.getElementById('deviceGrid');
   if (!grid) return;
-  grid.dataset.discovered = 'true';
+  // Só marcar como descoberto se encontrou peers — senão deixa o updateDevices atualizar
+  grid.dataset.discovered = peers.length > 0 ? 'true' : 'false';
 
   if (peers.length === 0) {
     grid.innerHTML = `
