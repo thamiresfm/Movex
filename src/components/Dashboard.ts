@@ -834,25 +834,45 @@ export async function renderDashboard(): Promise<void> {
         list.innerHTML = '<div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>';
         return;
       }
-      list.innerHTML = peers.map(p => {
+      // Usar createElement + textContent para evitar XSS com dados de rede (hostname, addr)
+      list.innerHTML = '';
+      peers.forEach(p => {
         const date = new Date(p.last_connected * 1000).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-        return `
-          <div onclick="connectToPeer('${p.addr}', ${p.port})" style="
-            display:flex;align-items:center;justify-content:space-between;
-            padding:8px 12px;background:var(--bg-2);border-radius:8px;
-            cursor:pointer;border:1px solid var(--border);transition:border-color .15s;
-          " onmouseover="this.style.borderColor='var(--border-c)'" onmouseout="this.style.borderColor='var(--border)'">
-            <div>
-              <div style="font-size:13px;font-weight:600;color:var(--text);">${p.hostname}</div>
-              <div style="font-size:10px;color:var(--text-3);">${p.addr}:${p.port}</div>
-            </div>
-            <div style="text-align:right;">
-              <div style="font-size:10px;color:var(--text-3);">${date}</div>
-              <div style="font-size:10px;color:var(--cyan);margin-top:2px;">Conectar →</div>
-            </div>
-          </div>
-        `;
-      }).join('');
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg-2);border-radius:8px;cursor:pointer;border:1px solid var(--border);transition:border-color .15s;';
+        row.addEventListener('mouseover', () => { row.style.borderColor = 'var(--border-c)'; });
+        row.addEventListener('mouseout', () => { row.style.borderColor = 'var(--border)'; });
+        // Capturar addr e port sem interpolação de string em onclick
+        const addr = p.addr as string;
+        const port = Number(p.port);
+        row.addEventListener('click', () => (window as any).connectToPeer?.(addr, port));
+
+        const left = document.createElement('div');
+        const nameEl = document.createElement('div');
+        nameEl.style.cssText = 'font-size:13px;font-weight:600;color:var(--text);';
+        nameEl.textContent = p.hostname; // textContent — sem XSS
+        const ipEl = document.createElement('div');
+        ipEl.style.cssText = 'font-size:10px;color:var(--text-3);';
+        ipEl.textContent = `${p.addr}:${p.port}`; // textContent — sem XSS
+        left.appendChild(nameEl);
+        left.appendChild(ipEl);
+
+        const right = document.createElement('div');
+        right.style.cssText = 'text-align:right;';
+        const dateEl = document.createElement('div');
+        dateEl.style.cssText = 'font-size:10px;color:var(--text-3);';
+        dateEl.textContent = date;
+        const connectEl = document.createElement('div');
+        connectEl.style.cssText = 'font-size:10px;color:var(--cyan);margin-top:2px;';
+        connectEl.textContent = 'Conectar →';
+        right.appendChild(dateEl);
+        right.appendChild(connectEl);
+
+        row.appendChild(left);
+        row.appendChild(right);
+        list.appendChild(row);
+      });
     } catch { /* fora do Tauri */ }
   };
 
@@ -1148,26 +1168,32 @@ function renderDiscoveredDevices(peers: PeerInfo[]) {
   grid.innerHTML = deviceCards(devices);
 }
 
-function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;addr:string|null;port:number}[]) {
-  return devices.map(d => `
-    <div onclick="${d.addr ? `connectToPeer('${d.addr}', ${d.port})` : ''}"
-      style="background:var(--bg-3);border:1px solid ${d.online?'rgba(0,212,255,.2)':'var(--border)'};
-             border-radius:14px;padding:20px;${d.addr?'cursor:pointer;':''}transition:all .2s;">
-      <div style="width:44px;height:44px;background:var(--bg-4);border-radius:11px;
-                  display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;">${d.icon}</div>
-      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">${d.name}</div>
-      <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">${d.ip}</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;
-                     font-weight:600;background:${d.online?'rgba(0,212,255,.12)':'rgba(255,75,110,.1)'};
-                     color:${d.online?'var(--cyan)':'var(--danger)'};">
-          <span style="width:5px;height:5px;border-radius:50%;background:currentColor;"></span>
-          ${d.online ? 'Online' : 'Offline'}
-        </span>
-        ${d.addr ? `<span style="font-size:10px;color:var(--cyan);font-weight:600;">Conectar →</span>` : ''}
+function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;addr:string|null;port:number}[]): string {
+  // Construir HTML seguro — campos name/ip/icon vêm da rede, usar encoding manual
+  const esc = (s: string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return devices.map(d => {
+    const onclick = d.addr
+      ? `onclick="connectToPeer('${esc(d.addr)}', ${Number(d.port)})"` : '';
+    return `
+      <div ${onclick}
+        style="background:var(--bg-3);border:1px solid ${d.online?'rgba(0,212,255,.2)':'var(--border)'};
+               border-radius:14px;padding:20px;${d.addr?'cursor:pointer;':''}transition:all .2s;">
+        <div style="width:44px;height:44px;background:var(--bg-4);border-radius:11px;
+                    display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;">${esc(d.icon)}</div>
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">${esc(d.name)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">${esc(d.ip)}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;
+                       font-weight:600;background:${d.online?'rgba(0,212,255,.12)':'rgba(255,75,110,.1)'};
+                       color:${d.online?'var(--cyan)':'var(--danger)'};">
+            <span style="width:5px;height:5px;border-radius:50%;background:currentColor;"></span>
+            ${d.online ? 'Online' : 'Offline'}
+          </span>
+          ${d.addr ? `<span style="font-size:10px;color:var(--cyan);font-weight:600;">Conectar →</span>` : ''}
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function simulateCmd(cmd: string): string {

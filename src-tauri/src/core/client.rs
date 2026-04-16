@@ -244,8 +244,11 @@ async fn run_session<S>(
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
-                        if let Message::ClipboardData { ref data, .. } = *msg {
-                            last_clipboard = String::from_utf8(data.clone()).ok();
+                        // Atualizar cache com CRC32 (igual ao que o remetente calcula)
+                        // Evita reenvio imediato após receber imagem (from_utf8 falhava para PNG)
+                        if let Message::ClipboardData { ref mime, ref data } = *msg {
+                            let hash = crc32_simple(data);
+                            last_clipboard = Some(format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash));
                         }
                     }
                     Ok(Message::FileStart { id, name, size }) => {

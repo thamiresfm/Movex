@@ -692,9 +692,9 @@ pub fn run() {
                             }
                             "lock" => {
                                 use std::sync::atomic::Ordering;
-                                let current = state_tray.lock_mode.load(Ordering::Relaxed);
-                                state_tray.lock_mode.store(!current, Ordering::Relaxed);
-                                tracing::info!("Tray: modo lock {}", if !current { "ATIVO" } else { "INATIVO" });
+                                // fetch_xor atômico — mesma abordagem do toggle_lock IPC
+                                let was = state_tray.lock_mode.fetch_xor(true, Ordering::AcqRel);
+                                tracing::info!("Tray: modo lock {}", if !was { "ATIVO" } else { "INATIVO" });
                             }
                             "disconnect" => {
                                 let s = state_tray.clone();
@@ -736,9 +736,9 @@ pub fn run() {
                     move |_app, _shortcut, event| {
                         if event.state == ShortcutState::Pressed {
                             use std::sync::atomic::Ordering;
-                            let current = state_for_shortcut.lock_mode.load(Ordering::Relaxed);
-                            state_for_shortcut.lock_mode.store(!current, Ordering::Relaxed);
-                            tracing::info!("Atalho: modo lock toggled → {}", !current);
+                            // fetch_xor atômico — evita race condition com tray e IPC
+                            let was = state_for_shortcut.lock_mode.fetch_xor(true, Ordering::AcqRel);
+                            tracing::info!("Atalho: modo lock toggled → {}", !was);
                         }
                     },
                 ) {
