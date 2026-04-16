@@ -84,19 +84,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Movex ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
           args: --target universal-apple-darwin
 
-      - name: Copiar artefatos
-        shell: bash
-        run: |
-          mkdir -p artifacts
-          find src-tauri/target -name "*.dmg" 2>/dev/null | xargs -I{} cp {} artifacts/ || true
-          ls -lah artifacts/
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
         with:
           name: Movex-macOS
-          path: artifacts/
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: warn
           retention-days: 7
 
@@ -133,71 +131,27 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Copiar artefatos
-        shell: bash
-        run: |
-          mkdir -p artifacts
-          find src-tauri/target -path "*/bundle/msi/*.msi" | xargs -I{} cp {} artifacts/ 2>/dev/null || true
-          find src-tauri/target -path "*/bundle/nsis/*.exe" | xargs -I{} cp {} artifacts/ 2>/dev/null || true
-          ls -lah artifacts/
-
-      - uses: actions/upload-artifact@v4
         with:
-          name: Movex-Windows
-          path: artifacts/
+          tagName: ${{ github.ref_name }}
+          releaseName: "Movex ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: Movex-Windows-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: warn
           retention-days: 7
 
-  # ──────────────────────────────────────────────────────────────
-  # Release — APENAS em tags v*, após builds concluídos
-  # ──────────────────────────────────────────────────────────────
-  release:
-    name: Publicar Release
-    runs-on: ubuntu-latest
-    needs: [build-macos, build-windows]
-    if: startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - name: Upload NSIS
+        uses: actions/upload-artifact@v4
         with:
-          name: Movex-macOS
-          path: release-assets/
-        continue-on-error: true
+          name: Movex-Windows-exe
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+          retention-days: 7
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: Movex-Windows
-          path: release-assets/
-        continue-on-error: true
-
-      - name: Publicar Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "Movex ${{ github.ref_name }}"
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          body: |
-            ## Movex ${{ github.ref_name }}
-
-            Controle múltiplos computadores com um único teclado e mouse pela rede local.
-
-            ### 📦 Downloads
-
-            | Plataforma | Arquivo | Requisito |
-            |---|---|---|
-            | **macOS** | `Movex_*.dmg` | macOS 12+ · Apple Silicon + Intel |
-            | **Windows** | `Movex_*.msi` | Windows 10/11 · x64 |
-            | **Windows** | `Movex_*.exe` | Windows 10/11 · x64 |
-
-            ### 🚀 Como usar
-            1. Instale o Movex nos dois computadores
-            2. No principal, selecione **Servidor**
-            3. No outro, selecione **Cliente** com a mesma chave
-            4. Mova o cursor para a borda para passar o controle
-          files: release-assets/**/*
-          fail_on_unmatched_files: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # O tauri-action já faz o upload direto para o Release via tagName.
+  # Nenhum job extra de release necessário.
