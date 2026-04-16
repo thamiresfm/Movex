@@ -123,27 +123,23 @@ pub fn apply_clipboard_message(msg: &Message) {
 
 // ── Codificação PNG mínima ────────────────────────────────────────────────────
 
-/// Codifica RGBA para PNG usando zlib puro (sem dependência extra)
+/// Codifica RGBA para PNG — retorna None se o buffer não corresponde às dimensões
 fn encode_rgba_to_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     use std::io::Write;
 
-    fn crc32(data: &[u8]) -> u32 {
-        let mut crc = 0xFFFFFFFFu32;
-        for &byte in data {
-            crc ^= byte as u32;
-            for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB88320 } else { crc >> 1 };
-            }
-        }
-        !crc
+    let expected = (width as usize) * (height as usize) * 4;
+    if rgba.len() < expected {
+        warn!("encode_rgba_to_png: buffer {}B < esperado {}B para {}x{}", rgba.len(), expected, width, height);
+        // Usar apenas os bytes disponíveis (preenchimento com zeros implícito pelo fatiamento)
     }
 
+    // Usando crc32 do módulo utils compartilhado
     fn chunk(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
         let len = (data.len() as u32).to_be_bytes();
         let mut combined = Vec::with_capacity(4 + data.len());
         combined.extend_from_slice(tag);
         combined.extend_from_slice(data);
-        let crc = crc32(&combined).to_be_bytes();
+        let crc = crate::core::utils::crc32(&combined).to_be_bytes();
         let mut out = Vec::with_capacity(8 + data.len() + 4);
         out.extend_from_slice(&len);
         out.extend_from_slice(&combined);

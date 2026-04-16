@@ -212,7 +212,7 @@ async fn run_session<S>(
                     // Hash CRC32 do conteúdo para detectar mudanças reais (não só tamanho)
                     let key = match &msg {
                         Message::ClipboardData { mime, data } => {
-                            let hash = crc32_simple(data);
+                            let hash = crate::core::utils::crc32(data);
                             format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash)
                         }
                         _ => continue,
@@ -247,7 +247,7 @@ async fn run_session<S>(
                         // Atualizar cache com CRC32 (igual ao que o remetente calcula)
                         // Evita reenvio imediato após receber imagem (from_utf8 falhava para PNG)
                         if let Message::ClipboardData { ref mime, ref data } = *msg {
-                            let hash = crc32_simple(data);
+                            let hash = crate::core::utils::crc32(data);
                             last_clipboard = Some(format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash));
                         }
                     }
@@ -299,15 +299,5 @@ async fn run_session<S>(
     *started = None;
 }
 
-/// CRC32 para detecção de mudança de clipboard (evita falsos negativos de mime:len)
-fn crc32_simple(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
-        }
-    }
-    !crc
-}
+// CRC32 movido para crate::core::utils::crc32
 

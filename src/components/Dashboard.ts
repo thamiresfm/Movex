@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { addLog, clearLogs } from "./Logs";
+import { initScreenBorder } from "./ScreenBorder";
+import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
+import { initStatusListener, onStatusChange, startApprovalPolling } from "./ConnectionStatus";
+import { cleanupAllListeners } from "../utils/tauri-events";
 
 interface StatusPayload {
   connected: boolean;
@@ -481,26 +485,88 @@ export async function renderDashboard(): Promise<void> {
     addLog('Conexão recusada ✕', 'warn');
   };
 
-  // Polling para detectar solicitações de conexão pendentes
-  let lastPending: string | null = null;
-  const checkPendingApproval = async () => {
-    try {
-      const pending = await invoke<string | null>('get_pending_approval');
-      if (pending && pending !== lastPending) {
-        lastPending = pending;
-        showApprovalModal(pending);
-        addLog(`Solicitação de conexão de: ${pending}`, 'warn');
-      } else if (!pending && lastPending) {
-        lastPending = null;
-        hideApprovalModal();
-      }
-    } catch { /* fora do Tauri */ }
-  };
-  setInterval(checkPendingApproval, 500);
+  // Polling de aprovação movido para ConnectionStatus.startApprovalPolling — chamado abaixo
 
-  // Inicializar
-  await updateStatus();
-  setInterval(updateStatus, 3000);
+  // ── Inicializar módulos separados ─────────────────────────────────────────
+  await initScreenBorder();        // borda luminosa via evento Tauri (sem eval)
+  await initFileTransfer();        // drag-and-drop com cleanup correto
+  await initStatusListener();      // status via evento + polling fallback
+
+  // Delegar status updates para o módulo ConnectionStatus
+  onStatusChange(async (status) => {
+    try {
+      const settings = await invoke<any>('get_settings');
+      updateScreenMap(settings, status);
+      const latEl = document.getElementById('latencyVal');
+      if (latEl) {
+        if (status.connected && status.latency_ms != null) {
+          latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
+        } else {
+          latEl.innerHTML = `<span style="color:var(--text-3);">--</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span>`;
+        }
+      }
+      const uptimeEl = document.getElementById('uptimeVal');
+      if (uptimeEl) {
+        const secs = status.uptime_secs ?? 0;
+        const hrs  = Math.floor(secs / 3600);
+        const mins = Math.floor((secs % 3600) / 60);
+        const uptimeStr = hrs > 0 ? `${hrs}h ${mins}m` : secs > 0 ? `${mins}m ${secs % 60}s` : '--';
+        uptimeEl.innerHTML = `<span style="font-size:${hrs > 0 ? '28' : '22'}px">${uptimeStr}</span><span style="font-size:12px;color:var(--text-2);margin-left:4px;">uptime</span>`;
+      }
+      // Botões conectar/desconectar
+      const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;
+      const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement;
+      if (btnConnect && btnDisconnect) {
+        btnConnect.style.display = status.connected ? 'none' : 'inline-flex';
+        btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
+      }
+      updateDevices(status, settings);
+      // Borda luminosa — cliente ativo
+      const isClient = settings.role === 'client';
+      const isRemoteActive = status.active_screen === 'Remote';
+      invoke('set_screen_border', { active: isClient && isRemoteActive && status.connected, color: '#00d4ff' }).catch(() => {});
+      // Stats
+      try {
+        const stats = await invoke<any>('get_stats');
+        const bytes = (n: number) => {
+          if (n >= 1073741824) return `${(n/1073741824).toFixed(1)} GB`;
+          if (n >= 1048576)    return `${(n/1048576).toFixed(1)} MB`;
+          if (n >= 1024)       return `${(n/1024).toFixed(0)} KB`;
+          return `${n} B`;
+        };
+        const total = (stats.bytes_sent ?? 0) + (stats.bytes_received ?? 0);
+        const nodesEl = document.getElementById('nodesLabel');
+        if (nodesEl && status.connected) nodesEl.textContent = `2 Nós Conectados · ${bytes(total)} transferidos`;
+      } catch { /* sem stats */ }
+      // Transferências
+      try {
+        const transfers = await invoke<any[]>('get_transfers');
+        const section = document.getElementById('transfersSection');
+        const list = document.getElementById('transfersList');
+        if (section && list) {
+          section.style.display = transfers.length > 0 ? 'block' : 'none';
+          list.innerHTML = transfers.map(t => `
+            <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+              <span style="font-size:18px;">${t.direction === 'Sending' ? '📤' : '📥'}</span>
+              <div style="flex:1;">
+                <div style="font-size:13px;font-weight:600;color:var(--text);">${t.name}</div>
+                <div style="background:var(--bg-5);border-radius:3px;height:4px;margin-top:4px;">
+                  <div style="background:var(--cyan);height:4px;border-radius:3px;width:${t.percent ?? 0}%;transition:width .3s;"></div>
+                </div>
+              </div>
+              <span style="font-size:11px;color:var(--text-3);">${t.percent ?? 0}%</span>
+            </div>
+          `).join('');
+        }
+      } catch { /* sem transferências */ }
+    } catch { /* fora do Tauri */ }
+  });
+
+  // Polling de aprovação via módulo dedicado
+  startApprovalPolling(
+    (hostname) => showApprovalModal(hostname),
+    () => hideApprovalModal(),
+  );
 
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
@@ -639,89 +705,7 @@ export async function renderDashboard(): Promise<void> {
     if (navEl) (window as any).navTo('painel', navEl);
   });
 
-  // ── Drag-and-drop de arquivos ──────────────────────────────────────────────
-  document.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    const overlay = document.getElementById('dropOverlay');
-    if (overlay) overlay.style.display = 'flex';
-  });
-
-  document.addEventListener('dragleave', (e) => {
-    // relatedTarget === null indica que o cursor saiu da janela
-    if (e.relatedTarget === null) {
-      const overlay = document.getElementById('dropOverlay');
-      if (overlay) overlay.style.display = 'none';
-    }
-  });
-
-  document.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    const overlay = document.getElementById('dropOverlay');
-    if (overlay) overlay.style.display = 'none';
-
-    const files = Array.from(e.dataTransfer?.files ?? []);
-    if (files.length === 0) return;
-
-    // Em Tauri, usar tauri://drop event — aqui pegamos os paths via file.name
-    // A API real de path vem do evento tauri drag-and-drop
-    const paths = files.map(f => (f as any).path ?? f.name).filter(Boolean);
-    if (paths.length === 0) {
-      addLog('Arraste arquivos do sistema de arquivos para transferir.', 'warn');
-      return;
-    }
-
-    addLog(`Transferindo ${paths.length} arquivo(s)...`, 'info');
-    const count = await invoke<number>('drop_file_to_peer', { paths }).catch((e: unknown) => {
-      addLog(`Erro no drop: ${e}`, 'warn');
-      return 0;
-    });
-    if (count > 0) addLog(`${count} arquivo(s) em transferência.`, 'sec');
-  });
-
-  // Overlay de drop
-  document.body.insertAdjacentHTML('beforeend', `
-    <div id="dropOverlay" style="
-      display:none;position:fixed;inset:0;z-index:9998;
-      background:rgba(0,212,255,.08);
-      border:3px dashed var(--cyan);
-      align-items:center;justify-content:center;
-      pointer-events:none;
-    ">
-      <div style="text-align:center;color:var(--cyan);">
-        <div style="font-size:48px;margin-bottom:12px;">📁</div>
-        <div style="font-size:18px;font-weight:700;">Soltar para transferir ao peer</div>
-      </div>
-    </div>
-  `);
-
-  // Tauri drag-and-drop real
-  try {
-    const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-    const webview = getCurrentWebviewWindow();
-    await webview.onDragDropEvent(async (event) => {
-      if (event.payload.type === 'drop') {
-        const paths = event.payload.paths ?? [];
-        if (paths.length === 0) return;
-        addLog(`Transferindo ${paths.length} arquivo(s) via drag-and-drop...`, 'info');
-        const count = await invoke<number>('drop_file_to_peer', { paths }).catch(() => 0);
-        if (count > 0) addLog(`${count} arquivo(s) enviado(s).`, 'sec');
-        else addLog('Nenhum arquivo foi transferido.', 'warn');
-      }
-    });
-  } catch { /* API não disponível */ }
-
-  // ── Borda luminosa no monitor ativo ──────────────────────────────────────
-  let borderActive = false;
-  const updateScreenBorder = async (connected: boolean, isRemote: boolean) => {
-    const shouldShow = connected && isRemote; // cliente com cursor do servidor
-    if (shouldShow !== borderActive) {
-      borderActive = shouldShow;
-      await invoke('set_screen_border', {
-        active: shouldShow,
-        color: '#00d4ff',
-      }).catch(() => {});
-    }
-  };
+  // Drag-and-drop, borda luminosa e status → módulos FileTransfer, ScreenBorder, ConnectionStatus
 
   // ── Verificar atualização ao iniciar ──────────────────────────────────────
   setTimeout(async () => {
@@ -998,93 +982,7 @@ export async function renderDashboard(): Promise<void> {
   // Sem logs falsos — apenas logs reais do backend
 }
 
-async function updateStatus() {
-  try {
-    const [status, settings] = await Promise.all([
-      invoke<StatusPayload>('get_status'),
-      invoke<SettingsPayload>('get_settings'),
-    ]);
-
-    updateScreenMap(settings, status);
-
-    const latEl = document.getElementById('latencyVal');
-    if (latEl) {
-      if (status.connected && status.latency_ms != null) {
-        latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
-      } else {
-        latEl.innerHTML = `<span style="color:var(--text-3);">--</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span>`;
-      }
-    }
-
-    const uptimeEl = document.getElementById('uptimeVal');
-    if (uptimeEl) {
-      const secs = status.uptime_secs ?? 0;
-      const hrs  = Math.floor(secs / 3600);
-      const mins = Math.floor((secs % 3600) / 60);
-      const uptimeStr = hrs > 0 ? `${hrs}h ${mins}m` : secs > 0 ? `${mins}m ${secs % 60}s` : '--';
-      uptimeEl.innerHTML = `<span style="font-size:${hrs>0?'28':'22'}px">${uptimeStr}</span><span style="font-size:12px;color:var(--text-2);margin-left:4px;">uptime</span>`;
-    }
-
-    updateDevices(status, settings);
-
-    // Borda luminosa — ativa no cliente quando cursor está nesta máquina
-    const isClient = settings.role === 'client';
-    const isRemoteActive = status.active_screen === 'Remote';
-    // Borda ciano quando servidor está controlando esta tela (cliente ativo)
-    if (typeof updateScreenBorder === 'function') {
-      updateScreenBorder(status.connected, isClient && isRemoteActive);
-    }
-
-    // Estatísticas reais
-    try {
-      const stats = await invoke<any>('get_stats');
-      const bytes = (n: number) => {
-        if (n >= 1073741824) return `${(n/1073741824).toFixed(1)} GB`;
-        if (n >= 1048576)    return `${(n/1048576).toFixed(1)} MB`;
-        if (n >= 1024)       return `${(n/1024).toFixed(0)} KB`;
-        return `${n} B`;
-      };
-      const totalBytes = (stats.bytes_sent ?? 0) + (stats.bytes_received ?? 0);
-      const nodesEl = document.getElementById('nodesLabel');
-      if (nodesEl && status.connected) {
-        nodesEl.textContent = `2 Nós Conectados · ${bytes(totalBytes)} transferidos`;
-      }
-      const netEl = document.querySelector('#page-painel .stat-value-net') as HTMLElement;
-      if (netEl) netEl.textContent = bytes(totalBytes);
-    } catch { /* sem stats */ }
-
-    // Botão conectar/desconectar
-    const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;
-    const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement;
-    if (btnConnect && btnDisconnect) {
-      btnConnect.style.display = status.connected ? 'none' : 'inline-flex';
-      btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
-    }
-
-    // Transferências em andamento
-    try {
-      const transfers = await invoke<any[]>('get_transfers');
-      const section = document.getElementById('transfersSection');
-      const list = document.getElementById('transfersList');
-      if (section && list) {
-        section.style.display = transfers.length > 0 ? 'block' : 'none';
-        list.innerHTML = transfers.map(t => `
-          <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
-            <span style="font-size:18px;">${t.direction === 'Sending' ? '📤' : '📥'}</span>
-            <div style="flex:1;">
-              <div style="font-size:13px;font-weight:600;color:var(--text);">${t.name}</div>
-              <div style="background:var(--bg-5);border-radius:3px;height:4px;margin-top:4px;">
-                <div style="background:var(--cyan);height:4px;border-radius:3px;width:${t.percent ?? 0}%;transition:width .3s;"></div>
-              </div>
-            </div>
-            <span style="font-size:11px;color:var(--text-3);">${t.percent ?? 0}%</span>
-          </div>
-        `).join('');
-      }
-    } catch { /* transferências indisponíveis */ }
-
-  } catch { /* Tauri não disponível em browser */ }
-}
+// updateStatus foi substituído por onStatusChange no módulo ConnectionStatus
 
 function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
   const map = document.getElementById('screenMap');

@@ -510,16 +510,24 @@ async fn drop_file_to_peer(
     for path_str in paths {
         let path = std::path::Path::new(&path_str).to_path_buf();
 
-        // Proteção contra path traversal: canonicalizar e rejeitar ".." e caminhos relativos
-        if !path.is_absolute() {
-            tracing::warn!("drop_file_to_peer: rejeitando path relativo: {:?}", path);
+        // Canonicalizar para resolver symlinks e rejeitar path traversal
+        let canonical = match tokio::fs::canonicalize(&path).await {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::warn!("drop_file_to_peer: path inválido ou inexistente: {:?}", path);
+                continue;
+            }
+        };
+        // Rejeitar diretórios e caminhos com ".." (pós-canonicalização)
+        if canonical.is_dir() {
+            tracing::warn!("drop_file_to_peer: rejeitando diretório: {:?}", canonical);
             continue;
         }
-        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            tracing::warn!("drop_file_to_peer: rejeitando path com '..': {:?}", path);
+        if !canonical.is_absolute() {
+            tracing::warn!("drop_file_to_peer: path não absoluto após canonicalização: {:?}", canonical);
             continue;
         }
-        if !path.exists() { continue; }
+        let path = canonical; // usar o path canonicalizado daqui em diante
 
         let transfer_id = state.next_transfer_id().await;
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -572,17 +580,26 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<Option<String>, Strin
     }
 }
 
-/// Instala a atualização disponível
+/// Instala a atualização disponível — retorna Err se não há update
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_updater::UpdaterExt;
     let updater = app.updater().map_err(|e| e.to_string())?;
-    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
-        update.download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => {
+            let version = update.version.to_string();
+            update.download_and_install(|downloaded, total| {
+                if let Some(t) = total {
+                    tracing::info!("Update: {}/{} bytes ({:.0}%)", downloaded, t,
+                        downloaded as f64 / t as f64 * 100.0);
+                }
+            }, || {
+                tracing::info!("Update instalado — reiniciando...");
+            }).await.map_err(|e| e.to_string())?;
+            Ok(format!("v{} instalada com sucesso", version))
+        }
+        None => Err("Nenhuma atualização disponível".to_string()),
     }
-    Ok(())
 }
 
 /// Valida que color é um valor CSS seguro (hex ou nome simples)
@@ -591,47 +608,20 @@ fn is_safe_css_color(color: &str) -> bool {
     color.len() <= 30 && color.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
 }
 
-/// Ativa/desativa borda luminosa no monitor (overlay CSS)
+/// Ativa/desativa borda luminosa no monitor via evento Tauri (sem eval/unsafe-inline)
 #[tauri::command]
 async fn set_screen_border(
     app: tauri::AppHandle,
     active: bool,
     color: String,
 ) -> Result<(), String> {
-    // Validar color para evitar CSS/JS injection
     if !is_safe_css_color(&color) {
         return Err(format!("Cor CSS inválida: '{}'", color));
     }
-    if let Some(win) = tauri::Manager::get_webview_window(&app, "main") {
-        let script = format!(
-            r#"
-            (function() {{
-                const existing = document.getElementById('__movex_border__');
-                if (existing) existing.remove();
-                if ({active}) {{
-                    const div = document.createElement('div');
-                    div.id = '__movex_border__';
-                    div.style.cssText = `
-                        position: fixed;
-                        inset: 0;
-                        pointer-events: none;
-                        z-index: 999999;
-                        border: 4px solid {color};
-                        box-shadow: inset 0 0 12px {color}88, 0 0 12px {color}44;
-                        animation: movex_pulse 1.5s ease-in-out infinite;
-                    `;
-                    const style = document.createElement('style');
-                    style.textContent = '@keyframes movex_pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.6; }} }}';
-                    document.head.appendChild(style);
-                    document.body.appendChild(div);
-                }}
-            }})();
-            "#,
-            active = active,
-            color = color,
-        );
-        win.eval(&script).map_err(|e| e.to_string())?;
-    }
+    // Emitir evento para o frontend — elimina necessidade de eval() e unsafe-inline na CSP
+    use tauri::Emitter;
+    app.emit("movex://screen-border", serde_json::json!({ "active": active, "color": color }))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
