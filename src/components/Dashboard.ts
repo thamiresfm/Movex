@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { addLog, clearLogs } from "./Logs";
 
 interface StatusPayload {
@@ -19,6 +20,9 @@ interface SettingsPayload {
 export async function renderDashboard(): Promise<void> {
   const app = document.getElementById("app")!;
 
+  // Ler versão real do tauri.conf.json em tempo de execução
+  const appVersion = await getVersion().catch(() => "0.1.0");
+
   app.innerHTML = `
     <div class="app">
       <!-- Sidebar -->
@@ -29,7 +33,7 @@ export async function renderDashboard(): Promise<void> {
           </div>
           <div>
             <div class="logo-name">Movex</div>
-            <div class="logo-version">V 2.0.4 · Online</div>
+            <div class="logo-version">V ${appVersion} · Online</div>
           </div>
         </div>
 
