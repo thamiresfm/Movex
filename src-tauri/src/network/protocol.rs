@@ -40,7 +40,8 @@ impl Message {
     /// Serializa para bytes: magic (4) + length (4 big-endian) + payload (bincode)
     pub fn encode(&self) -> Result<Vec<u8>, bincode::error::EncodeError> {
         let payload = bincode::encode_to_vec(self, bincode::config::standard())?;
-        let length = payload.len() as u32;
+        // Garante que o payload não excede u32::MAX (4 GB) — improvável mas seguro
+        let length = u32::try_from(payload.len()).unwrap_or(u32::MAX);
         let mut buf = Vec::with_capacity(8 + payload.len());
         buf.extend_from_slice(&MAGIC);
         buf.extend_from_slice(&length.to_be_bytes());
@@ -68,6 +69,43 @@ mod tests {
         assert_eq!(len, bytes.len() - 8);
         let decoded = Message::decode(&bytes[8..]).unwrap();
         assert!(matches!(decoded, Message::Ping));
+    }
+
+    #[test]
+    fn encode_decode_input_key_event() {
+        use crate::input::{InputEvent, Modifiers};
+        let event = InputEvent::KeyEvent {
+            keycode: 0x04, // 'a' em USB HID
+            pressed: true,
+            modifiers: Modifiers::CTRL,
+        };
+        let msg = Message::Input(event);
+        let bytes = msg.encode().unwrap();
+        let decoded = Message::decode(&bytes[8..]).unwrap();
+        match decoded {
+            Message::Input(InputEvent::KeyEvent { keycode, pressed, modifiers }) => {
+                assert_eq!(keycode, 0x04);
+                assert!(pressed);
+                assert!(modifiers.contains(Modifiers::CTRL));
+                assert!(!modifiers.contains(Modifiers::SHIFT));
+            }
+            _ => panic!("tipo errado"),
+        }
+    }
+
+    #[test]
+    fn encode_decode_file_end_checksum() {
+        let checksum = [0xABu8; 32];
+        let msg = Message::FileEnd { id: 42, checksum };
+        let bytes = msg.encode().unwrap();
+        let decoded = Message::decode(&bytes[8..]).unwrap();
+        match decoded {
+            Message::FileEnd { id, checksum: c } => {
+                assert_eq!(id, 42);
+                assert_eq!(c, [0xABu8; 32]);
+            }
+            _ => panic!("tipo errado"),
+        }
     }
 
     #[test]

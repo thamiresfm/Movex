@@ -21,7 +21,13 @@ impl Modifiers {
     pub const ALT: Self = Self(1 << 2);
     pub const META: Self = Self(1 << 3); // Cmd (macOS) / Win (Windows)
 
+    /// Retorna true se self contém **todos** os bits de other
     pub fn contains(&self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Retorna true se self e other têm **qualquer** bit em comum
+    pub fn intersects(&self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
 }
