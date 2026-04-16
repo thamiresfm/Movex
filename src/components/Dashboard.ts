@@ -118,7 +118,7 @@ export async function renderDashboard(): Promise<void> {
                 </div>
                 <div class="card">
                   <div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Latência</div>
-                  <div style="font-size:30px;font-weight:700;color:var(--text);line-height:1;letter-spacing:-1px;" id="latencyVal">4<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span></div>
+                  <div style="font-size:30px;font-weight:700;color:var(--text);line-height:1;letter-spacing:-1px;" id="latencyVal"><span style="color:var(--text-3);">--</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span></div>
                   <div style="font-size:11px;color:var(--text-3);margin-top:6px;">Sincronização ponta a ponta</div>
                 </div>
               </div>
@@ -310,8 +310,12 @@ async function updateStatus() {
     updateScreenMap(settings, status);
 
     const latEl = document.getElementById('latencyVal');
-    if (latEl && status.latency_ms !== undefined) {
-      latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
+    if (latEl) {
+      if (status.connected && status.latency_ms != null) {
+        latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
+      } else {
+        latEl.innerHTML = `<span style="color:var(--text-3);">--</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span>`;
+      }
     }
 
     const uptimeEl = document.getElementById('uptimeVal');
