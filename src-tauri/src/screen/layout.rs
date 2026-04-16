@@ -85,22 +85,31 @@ pub fn detect_monitors() -> MultiMonitorLayout {
 fn detect_monitors_macos() -> MultiMonitorLayout {
     use core_graphics::display::CGDisplay;
 
-    // Usar apenas o display principal — para multi-monitor completo precisa CGGetActiveDisplayList via FFI
-    let main = CGDisplay::main();
-    let bounds = main.bounds();
-    let scale = if bounds.size.width > 0.0 {
-        main.pixels_wide() as f32 / bounds.size.width as f32
-    } else { 1.0 };
+    // Obter lista de todos os displays ativos via CGGetActiveDisplayList
+    let displays = CGDisplay::active_displays().unwrap_or_default();
+    let main_id = CGDisplay::main().id;
 
-    let monitors = vec![Monitor {
-        id: main.id,
-        x: bounds.origin.x as i32,
-        y: bounds.origin.y as i32,
-        width: main.pixels_wide() as u32,
-        height: main.pixels_high() as u32,
-        scale_factor: scale,
-        is_primary: true,
-    }];
+    let mut monitors: Vec<Monitor> = displays.iter().enumerate().map(|(i, &id)| {
+        let display = CGDisplay::new(id);
+        let bounds = display.bounds();
+        let scale = if bounds.size.width > 0.0 {
+            display.pixels_wide() as f32 / bounds.size.width as f32
+        } else { 1.0 };
+        Monitor {
+            id,
+            x: bounds.origin.x as i32,
+            y: bounds.origin.y as i32,
+            width: display.pixels_wide() as u32,
+            height: display.pixels_high() as u32,
+            scale_factor: scale,
+            is_primary: id == main_id,
+        }
+    }).collect();
+
+    if monitors.is_empty() {
+        let d = CGDisplay::main();
+        monitors.push(Monitor { id: d.id, x: 0, y: 0, width: d.pixels_wide() as u32, height: d.pixels_high() as u32, scale_factor: 1.0, is_primary: true });
+    }
 
     MultiMonitorLayout { monitors }
 }

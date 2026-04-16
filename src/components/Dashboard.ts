@@ -647,7 +647,8 @@ export async function renderDashboard(): Promise<void> {
   });
 
   document.addEventListener('dragleave', (e) => {
-    if (e.clientX === 0 && e.clientY === 0) {
+    // relatedTarget === null indica que o cursor saiu da janela
+    if (e.relatedTarget === null) {
       const overlay = document.getElementById('dropOverlay');
       if (overlay) overlay.style.display = 'none';
     }
@@ -734,21 +735,36 @@ export async function renderDashboard(): Promise<void> {
   }, 5000);
 
   const showUpdateNotification = (version: string) => {
-    document.body.insertAdjacentHTML('beforeend', `
-      <div id="updateBanner" style="
-        position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-        background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;
-        padding:14px 20px;display:flex;align-items:center;gap:16px;
-        z-index:9997;box-shadow:0 4px 24px rgba(0,212,255,.15);
-      ">
-        <div>
-          <div style="font-size:13px;font-weight:700;color:var(--text);">🆕 Movex v${version} disponível</div>
-          <div style="font-size:11px;color:var(--text-3);">Clique para instalar e reiniciar</div>
-        </div>
-        <button onclick="installUpdate()" class="btn btn-cyan" style="white-space:nowrap;font-size:11px;">Instalar</button>
-        <button onclick="document.getElementById('updateBanner')?.remove()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:16px;">✕</button>
-      </div>
-    `);
+    // Usar createElement + textContent para evitar XSS com version do backend
+    const banner = document.createElement('div');
+    banner.id = 'updateBanner';
+    banner.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;padding:14px 20px;display:flex;align-items:center;gap:16px;z-index:9997;box-shadow:0 4px 24px rgba(0,212,255,.15);';
+
+    const info = document.createElement('div');
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:13px;font-weight:700;color:var(--text);';
+    title.textContent = `🆕 Movex v${version} disponível`; // textContent — sem XSS
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-size:11px;color:var(--text-3);';
+    sub.textContent = 'Clique para instalar e reiniciar';
+    info.appendChild(title);
+    info.appendChild(sub);
+
+    const installBtn = document.createElement('button');
+    installBtn.className = 'btn btn-cyan';
+    installBtn.style.cssText = 'white-space:nowrap;font-size:11px;';
+    installBtn.textContent = 'Instalar';
+    installBtn.onclick = () => (window as any).installUpdate();
+
+    const closeBtn = document.createElement('button');
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--text-3);cursor:pointer;font-size:16px;';
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => banner.remove();
+
+    banner.appendChild(info);
+    banner.appendChild(installBtn);
+    banner.appendChild(closeBtn);
+    document.body.appendChild(banner);
   };
 
   (window as any).installUpdate = async () => {

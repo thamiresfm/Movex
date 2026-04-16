@@ -42,6 +42,8 @@ rcgen        = "0.13"
 
 mdns-sd  = "0.11"
 arboard  = "3"
+image    = { version = "0.25", default-features = false, features = ["png"] }
+flate2   = "1"
 sha2     = "0.10"
 rand     = "0.8"
 hex      = "0.4"

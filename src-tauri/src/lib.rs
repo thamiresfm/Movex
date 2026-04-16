@@ -392,14 +392,15 @@ async fn connect_to_peer(
 
 // ── Novos comandos IPC ────────────────────────────────────────────────────────
 
-/// Toggle do modo lock (pausar/retomar transição de cursor)
+/// Toggle do modo lock (pausar/retomar transição de cursor) — operação atômica
 #[tauri::command]
 async fn toggle_lock(state: State<'_, SharedState>) -> Result<bool, String> {
     use std::sync::atomic::Ordering;
-    let locked = !state.lock_mode.load(Ordering::Relaxed);
-    state.lock_mode.store(locked, Ordering::Relaxed);
-    tracing::info!("Modo lock: {}", if locked { "ATIVO" } else { "INATIVO" });
-    Ok(locked)
+    // fetch_xor é atômico — evita race condition entre atalho global e comando IPC
+    let was_locked = state.lock_mode.fetch_xor(true, Ordering::AcqRel);
+    let now_locked = !was_locked;
+    tracing::info!("Modo lock: {}", if now_locked { "ATIVO" } else { "INATIVO" });
+    Ok(now_locked)
 }
 
 /// Retorna estatísticas da sessão atual
@@ -508,6 +509,16 @@ async fn drop_file_to_peer(
     let mut count = 0u32;
     for path_str in paths {
         let path = std::path::Path::new(&path_str).to_path_buf();
+
+        // Proteção contra path traversal: canonicalizar e rejeitar ".." e caminhos relativos
+        if !path.is_absolute() {
+            tracing::warn!("drop_file_to_peer: rejeitando path relativo: {:?}", path);
+            continue;
+        }
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            tracing::warn!("drop_file_to_peer: rejeitando path com '..': {:?}", path);
+            continue;
+        }
         if !path.exists() { continue; }
 
         let transfer_id = state.next_transfer_id().await;
@@ -574,14 +585,23 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Valida que color é um valor CSS seguro (hex ou nome simples)
+fn is_safe_css_color(color: &str) -> bool {
+    // Aceitar #RGB, #RRGGBB, #RRGGBBAA e nomes CSS simples (max 30 chars, alfanum)
+    color.len() <= 30 && color.chars().all(|c| c.is_ascii_alphanumeric() || c == '#')
+}
+
 /// Ativa/desativa borda luminosa no monitor (overlay CSS)
-/// O frontend aplica a borda via postMessage ao WebView
 #[tauri::command]
 async fn set_screen_border(
     app: tauri::AppHandle,
     active: bool,
     color: String,
 ) -> Result<(), String> {
+    // Validar color para evitar CSS/JS injection
+    if !is_safe_css_color(&color) {
+        return Err(format!("Cor CSS inválida: '{}'", color));
+    }
     if let Some(win) = tauri::Manager::get_webview_window(&app, "main") {
         let script = format!(
             r#"

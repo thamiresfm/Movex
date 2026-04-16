@@ -209,9 +209,12 @@ async fn run_session<S>(
             // Verificar clipboard periodicamente — texto E imagens
             _ = clipboard_check.tick() => {
                 if let Some(msg) = crate::clipboard::sync::create_clipboard_message() {
-                    // Verificar se mudou baseado no mime+tamanho
+                    // Hash CRC32 do conteúdo para detectar mudanças reais (não só tamanho)
                     let key = match &msg {
-                        Message::ClipboardData { mime, data } => format!("{}:{}", mime, data.len()),
+                        Message::ClipboardData { mime, data } => {
+                            let hash = crc32_simple(data);
+                            format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash)
+                        }
                         _ => continue,
                     };
                     let changed = last_clipboard.as_ref().map_or(true, |prev| prev != &key);
@@ -291,5 +294,17 @@ async fn run_session<S>(
     *status = ConnectionStatus::Disconnected;
     let mut started = state.session_started_at.lock().await;
     *started = None;
+}
+
+/// CRC32 para detecção de mudança de clipboard (evita falsos negativos de mime:len)
+fn crc32_simple(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
 }
 

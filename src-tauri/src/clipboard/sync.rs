@@ -175,45 +175,24 @@ fn encode_rgba_to_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     png
 }
 
-/// Compressão zlib nível 1 via std (sem dependência extra)
+/// Compressão zlib real via flate2 (nível fast — boa compressão, baixa latência)
 fn miniz_compress(data: &[u8]) -> Vec<u8> {
+    use flate2::{write::ZlibEncoder, Compression};
     use std::io::Write;
-    // Usar flate2 se disponível, senão armazenar sem compressão
-    // Aqui usamos zlib header + dados não comprimidos (deflate stored)
-    let mut out = Vec::new();
-    // zlib header: CMF=0x78, FLG=0x01 (no compression / low compression)
-    out.push(0x78);
-    out.push(0x01);
-    // deflate stored blocks
-    let mut pos = 0;
-    while pos < data.len() {
-        let end = (pos + 65535).min(data.len());
-        let last = end == data.len();
-        out.push(if last { 0x01 } else { 0x00 }); // BFINAL, BTYPE=00
-        let len = (end - pos) as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(&data[pos..end]);
-        pos = end;
-    }
-    // Adler32 checksum
-    let (mut s1, mut s2) = (1u32, 0u32);
-    for &b in data {
-        s1 = (s1 + b as u32) % 65521;
-        s2 = (s2 + s1) % 65521;
-    }
-    let adler = ((s2 << 16) | s1).to_be_bytes();
-    out.extend_from_slice(&adler);
-    out
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(data).unwrap_or_default();
+    encoder.finish().unwrap_or_default()
 }
 
-/// Decodifica PNG → RGBA (usa arboard image se disponível, senão raw)
+/// Decodifica PNG → bytes RGBA raw (obrigatório para arboard::set_image)
 fn decode_png_to_rgba(png_data: &[u8]) -> Option<Vec<u8>> {
-    // Tentar decodificar via arboard (que internamente usa image crate)
-    // Como não temos image crate separado, extrair raw IDAT como fallback
-    // Para simplicidade: retornar os bytes PNG como RGBA usando arboard
-    // Na prática o arboard aceita PNG diretamente em set_image quando passamos os bytes
-    Some(png_data.to_vec()) // placeholder — arboard lida internamente
+    use image::ImageDecoder;
+    let cursor = std::io::Cursor::new(png_data);
+    let decoder = image::codecs::png::PngDecoder::new(cursor).ok()?;
+    let total = decoder.total_bytes() as usize;
+    let mut rgba = vec![0u8; total];
+    decoder.read_image(&mut rgba).ok()?;
+    Some(rgba)
 }
 
 fn parse_image_mime(mime: &str) -> (u32, u32) {
