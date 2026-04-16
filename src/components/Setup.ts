@@ -14,10 +14,10 @@ export async function renderSetup(): Promise<void> {
       .join("-");
 
   app.innerHTML = `
-    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);position:relative;">
+    <div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:32px 24px 100px;background:var(--bg);position:relative;overflow-y:auto;">
       <div style="position:fixed;bottom:-100px;right:-100px;width:500px;height:500px;border-radius:50%;background:radial-gradient(circle,rgba(0,212,255,.08) 0%,transparent 60%);pointer-events:none;"></div>
 
-      <div style="width:640px;max-width:100%;">
+      <div style="width:640px;max-width:100%;margin-top:auto;margin-bottom:auto;">
         <div style="text-align:center;margin-bottom:20px;">
           <div style="font-size:28px;font-weight:800;color:var(--cyan);letter-spacing:-1px;">Movex</div>
         </div>
@@ -57,17 +57,22 @@ export async function renderSetup(): Promise<void> {
             </div>
           </div>
 
-          <div id="server-addr-field" style="display:none;margin-bottom:20px;">
-            <label style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;">Endereço do Servidor</label>
-            <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--text);outline:none;" />
+          <!-- Campos: endereço + hostname na mesma linha quando cliente -->
+          <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px;">
+            <div id="server-addr-field" style="display:none;">
+              <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Endereço do Servidor</label>
+              <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100"
+                style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Nome desta máquina</label>
+              <input id="hostnameInput" type="text" value="${settings.hostname}"
+                style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'Inter',sans-serif;font-size:13px;color:var(--text);outline:none;" />
+            </div>
           </div>
 
-          <div style="margin-bottom:24px;">
-            <label style="display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;">Nome desta máquina</label>
-            <input id="hostnameInput" type="text" value="${settings.hostname}" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-family:'Inter',sans-serif;font-size:14px;color:var(--text);outline:none;" />
-          </div>
-
-          <div style="display:flex;align-items:center;justify-content:space-between;">
+          <!-- Footer: ajuda + botões — sempre visível -->
+          <div style="display:flex;align-items:center;justify-content:space-between;padding-top:4px;">
             <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.3px;cursor:pointer;">ℹ Precisa de ajuda? Ver documentação</span>
             <div style="display:flex;gap:12px;align-items:center;">
               <button class="btn-ghost" onclick="">Voltar</button>
