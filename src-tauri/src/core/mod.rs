@@ -1,1 +1,5 @@
-// Módulo core — implementado na Task 4 e 6
+pub mod client;
+pub mod server;
+pub mod state;
+
+pub use state::{ActiveScreen, AppState, ConnectionStatus, SharedState};
