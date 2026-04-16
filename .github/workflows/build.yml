@@ -1,10 +1,11 @@
 name: Build Movex
 
 on:
+  # Builds completos APENAS em tags v* (release)
   push:
-    branches: [main]
     tags:
       - 'v*'
+  # Em PRs e push na main: só testes (rápido, ~5 min)
   pull_request:
     branches: [main]
 
@@ -16,7 +17,7 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────
-  # Job 1: Testes Rust
+  # Testes Rust — roda em TODOS os eventos (~5 min no Linux)
   # ──────────────────────────────────────────────────────────────
   test:
     name: Testes Rust
@@ -37,8 +38,8 @@ jobs:
 
       - name: Instalar dependências Linux
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
             libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libssl-dev pkg-config
@@ -47,37 +48,20 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
   # ──────────────────────────────────────────────────────────────
-  # Job 2: Build macOS + Windows usando tauri-action oficial
+  # Build macOS — APENAS em tags v*
+  # macOS consome 10x mais minutos que Linux
   # ──────────────────────────────────────────────────────────────
-  build:
+  build-macos:
+    name: Build macOS (Universal)
+    runs-on: macos-latest
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: --target universal-apple-darwin
-            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            name: macOS
-          - platform: windows-latest
-            args: ''
-            rust-targets: ''
-            name: Windows
-
-    name: Build ${{ matrix.name }}
-    runs-on: ${{ matrix.platform }}
-
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-targets }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: actions/cache@v4
         with:
@@ -85,71 +69,108 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ matrix.platform }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.platform }}-cargo-
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
 
       - run: npm ci
 
-      - name: Build e gerar instaladores
+      - name: Build Tauri macOS
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: ${{ matrix.args }}
+          args: --target universal-apple-darwin
 
-      - name: Listar artefatos gerados
-        shell: bash
-        run: |
-          echo "=== Artefatos gerados ==="
-          find src-tauri/target -name "*.dmg" -o -name "*.msi" -o -name "*.exe" -o -name "*.app" 2>/dev/null | grep -v "/deps/" | grep -v "\.dSYM" | head -20 || true
-
-      - name: Copiar artefatos para pasta de upload
+      - name: Copiar artefatos
         shell: bash
         run: |
           mkdir -p artifacts
-          # macOS
-          find src-tauri/target -name "*.dmg" 2>/dev/null | xargs -I{} cp {} artifacts/ 2>/dev/null || true
-          # Windows
-          find src-tauri/target -path "*/bundle/msi/*.msi" 2>/dev/null | xargs -I{} cp {} artifacts/ 2>/dev/null || true
-          find src-tauri/target -path "*/bundle/nsis/*.exe" 2>/dev/null | xargs -I{} cp {} artifacts/ 2>/dev/null || true
-          echo "=== Conteúdo da pasta artifacts/ ==="
-          ls -lah artifacts/ 2>/dev/null || echo "(vazio)"
+          find src-tauri/target -name "*.dmg" 2>/dev/null | xargs -I{} cp {} artifacts/ || true
+          ls -lah artifacts/
 
-      - name: Upload artefatos
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Movex-${{ matrix.name }}
+          name: Movex-macOS
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
 
   # ──────────────────────────────────────────────────────────────
-  # Job 3: Publicar Release (apenas em tags v*)
+  # Build Windows — APENAS em tags v*
   # ──────────────────────────────────────────────────────────────
-  release:
-    name: Publicar Release GitHub
-    runs-on: ubuntu-latest
-    needs: build
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
-      - name: Baixar artefatos macOS
-        uses: actions/download-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build Tauri Windows
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copiar artefatos
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          find src-tauri/target -path "*/bundle/msi/*.msi" | xargs -I{} cp {} artifacts/ 2>/dev/null || true
+          find src-tauri/target -path "*/bundle/nsis/*.exe" | xargs -I{} cp {} artifacts/ 2>/dev/null || true
+          ls -lah artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Movex-Windows
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────
+  # Release — APENAS em tags v*, após builds concluídos
+  # ──────────────────────────────────────────────────────────────
+  release:
+    name: Publicar Release
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
         with:
           name: Movex-macOS
           path: release-assets/
         continue-on-error: true
 
-      - name: Baixar artefatos Windows
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: Movex-Windows
           path: release-assets/
         continue-on-error: true
-
-      - name: Listar artefatos
-        run: find release-assets -type f | sort || echo "(nenhum)"
 
       - name: Publicar Release
         uses: softprops/action-gh-release@v2
@@ -163,8 +184,6 @@ jobs:
 
             Controle múltiplos computadores com um único teclado e mouse pela rede local.
 
-            ---
-
             ### 📦 Downloads
 
             | Plataforma | Arquivo | Requisito |
@@ -173,18 +192,11 @@ jobs:
             | **Windows** | `Movex_*.msi` | Windows 10/11 · x64 |
             | **Windows** | `Movex_*.exe` | Windows 10/11 · x64 |
 
-            ---
-
             ### 🚀 Como usar
-
-            1. Instale o Movex nos **dois** computadores
-            2. No computador principal, selecione **Servidor**
-            3. No outro, selecione **Cliente** e use a mesma chave de segurança
-            4. Mova o cursor para a **borda da tela** para passar o controle
-
-            ---
-
-            Rust · Tauri 2 · TLS 1.3 · mDNS · TypeScript
+            1. Instale o Movex nos dois computadores
+            2. No principal, selecione **Servidor**
+            3. No outro, selecione **Cliente** com a mesma chave
+            4. Mova o cursor para a borda para passar o controle
           files: release-assets/**/*
           fail_on_unmatched_files: false
         env:
