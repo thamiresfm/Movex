@@ -141,6 +141,41 @@ async fn disconnect(state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Reseta todas as configurações para o padrão (volta ao setup wizard)
+#[tauri::command]
+async fn reset_settings(state: State<'_, SharedState>) -> Result<(), String> {
+    // Desconectar primeiro
+    {
+        let mut status = state.connection_status.lock().await;
+        *status = ConnectionStatus::Disconnected;
+    }
+    // Gerar novas configurações padrão (nova PSK, setup_complete = false)
+    let new_settings = Settings::default();
+    new_settings.save()?;
+    {
+        let mut s = state.settings.lock().await;
+        *s = new_settings;
+    }
+    tracing::info!("Configurações resetadas — voltando ao setup wizard");
+    Ok(())
+}
+
+/// Troca o papel (servidor ↔ cliente) e salva
+#[tauri::command]
+async fn set_role(state: State<'_, SharedState>, role: String) -> Result<(), String> {
+    let mut s = state.settings.lock().await;
+    s.role = if role == "server" { Role::Server } else { Role::Client };
+    s.save()
+}
+
+/// Define o endereço do servidor (modo cliente)
+#[tauri::command]
+async fn set_server_addr(state: State<'_, SharedState>, addr: Option<String>) -> Result<(), String> {
+    let mut s = state.settings.lock().await;
+    s.server_addr = addr;
+    s.save()
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -167,6 +202,9 @@ pub fn run() {
             complete_setup,
             start_connection,
             disconnect,
+            reset_settings,
+            set_role,
+            set_server_addr,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

@@ -179,53 +179,110 @@ export async function renderDashboard(): Promise<void> {
 
           <!-- CONFIGURAÇÕES -->
           <div class="page" id="page-configuracoes">
-            <div style="display:grid;grid-template-columns:1fr 280px;gap:14px;margin-bottom:14px;">
-              <div class="card">
-                <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">
-                  <div style="display:flex;align-items:center;gap:12px;">
-                    <div style="width:36px;height:36px;background:var(--cyan-dim);border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--cyan);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg></div>
-                    <span style="font-size:15px;font-weight:700;color:var(--text);">Ativar Criptografia SSL</span>
+
+            <!-- Papel desta máquina -->
+            <div class="card" style="margin-bottom:14px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:14px;">Papel desta Máquina</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                <div id="roleServerCard" onclick="selectRoleCard('server')" style="border:2px solid var(--cyan);background:linear-gradient(135deg,#0f1824,#0b0c10);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
+                  <div style="width:36px;height:36px;background:var(--cyan-dim);border-radius:9px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.8"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/><path d="M6 9h.01M9 9h6"/></svg>
                   </div>
-                  <label class="toggle"><input type="checkbox" checked /><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+                  <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">Servidor</div>
+                  <div style="font-size:11px;color:var(--text-2);">Controla outras máquinas com este teclado e mouse</div>
                 </div>
-                <p style="font-size:12px;color:var(--text-2);line-height:1.5;margin-bottom:16px;">Proteja todos os pacotes de dados entre dispositivos usando o protocolo militar TLS 1.3.</p>
-                <div style="display:flex;gap:8px;"><span style="padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">AES-256 Ativo</span><span style="padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">Certificado Válido</span></div>
+                <div id="roleClientCard" onclick="selectRoleCard('client')" style="border:1.5px solid var(--border);background:var(--bg-3);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
+                  <div style="width:36px;height:36px;background:var(--bg-5);border-radius:9px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" stroke-width="1.8"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                  </div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">Cliente</div>
+                  <div style="font-size:11px;color:var(--text-2);">Recebe o controle de outra máquina</div>
+                </div>
               </div>
-              <div class="card">
-                <div style="font-size:9px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:6px;">Análise de Protocolo</div>
-                <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:14px;">Densidade de Tráfego</div>
-                <div style="display:flex;align-items:flex-end;gap:5px;height:64px;">${[40,60,45,75,55,90,100].map((h,i)=>`<div style="flex:1;border-radius:4px 4px 0 0;background:${i>=5?'var(--cyan)':'var(--bg-5)'};height:${h}%;min-height:8px;"></div>`).join('')}</div>
-                <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:9px;color:var(--text-3);"><span>08:00</span><span>Ativo</span><span>12:00</span></div>
+
+              <!-- Endereço do servidor (só visível no modo cliente) -->
+              <div id="serverAddrSection" style="display:none;padding:14px;background:var(--bg-2);border:1px solid var(--border-c);border-radius:10px;">
+                <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">Endereço do Servidor</div>
+                <div style="display:flex;gap:8px;">
+                  <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100 ou nome-do-pc.local"
+                    style="flex:1;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                  <button onclick="applyServerAddr()" class="btn btn-cyan" style="white-space:nowrap;">Salvar</button>
+                </div>
+                <div style="font-size:11px;color:var(--text-3);margin-top:6px;">IP ou hostname do computador servidor na rede local</div>
               </div>
             </div>
 
+            <!-- Porta + Chave -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
               <div class="card">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg><span style="font-size:13px;font-weight:600;color:var(--text);">Número da Porta</span></div>
-                <div style="position:relative;"><input type="number" value="24800" id="portInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 80px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:var(--text);outline:none;" /><span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;">Padrão TCP</span></div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+                  <span style="font-size:13px;font-weight:600;color:var(--text);">Porta TCP</span>
+                </div>
+                <div style="position:relative;">
+                  <input type="number" value="24800" id="portInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 80px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:var(--text);outline:none;" />
+                  <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;">Padrão</span>
+                </div>
               </div>
               <div class="card">
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg><span style="font-size:13px;font-weight:600;color:var(--text);">Chave de Acesso</span></div>
-                <div style="position:relative;"><input type="password" id="keyInput" value="movex-secret-key" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:var(--text);outline:none;" /><button onclick="toggleKey()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);">👁</button></div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                  <span style="font-size:13px;font-weight:600;color:var(--text);">Chave de Segurança</span>
+                </div>
+                <div style="position:relative;">
+                  <input type="password" id="keyInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text);outline:none;letter-spacing:2px;" />
+                  <button onclick="toggleKey()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
+                </div>
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Use a mesma chave nos dois computadores</div>
               </div>
             </div>
 
+            <!-- SSL + Clipboard -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
               <div class="card" style="border-left:3px solid var(--cyan);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:12px;"><div style="width:36px;height:36px;background:var(--cyan-dim);border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--cyan);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></div><label class="toggle"><input type="checkbox" checked /><div class="toggle-track"></div><div class="toggle-thumb"></div></label></div>
-                <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px;">Compartilhamento de Área de Transferência</div>
-                <div style="font-size:12px;color:var(--text-2);line-height:1.5;">Sincronize textos, imagens e arquivos entre todos os computadores conectados instantaneamente.</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                  <div style="font-size:14px;font-weight:700;color:var(--text);">🔒 Criptografia TLS 1.3</div>
+                  <label class="toggle"><input type="checkbox" checked disabled /><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+                </div>
+                <div style="font-size:11px;color:var(--text-2);line-height:1.5;margin-bottom:10px;">Sempre ativa. Todos os dados são protegidos com AES-256.</div>
+                <div style="display:flex;gap:6px;">
+                  <span style="padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">AES-256</span>
+                  <span style="padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;background:var(--cyan-dim);border:1px solid var(--border-c);color:var(--cyan);">TLS 1.3</span>
+                </div>
               </div>
-              <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;">
-                <div style="width:52px;height:52px;background:var(--cyan-dim);border:2px solid var(--border-c);border-radius:14px;display:flex;align-items:center;justify-content:center;color:var(--cyan);"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg></div>
-                <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--text);text-transform:uppercase;">Modo Fortalecido</div>
-                <div style="font-size:11px;color:var(--text-3);">Bloqueio automático de nós a cada 24h.</div>
+              <div class="card" style="border-left:3px solid var(--border);">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                  <div style="font-size:14px;font-weight:700;color:var(--text);">📋 Clipboard Compartilhado</div>
+                  <label class="toggle"><input type="checkbox" checked id="clipboardToggle"/><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+                </div>
+                <div style="font-size:11px;color:var(--text-2);line-height:1.5;">Copie em um computador e cole no outro automaticamente.</div>
               </div>
             </div>
 
-            <div style="display:flex;justify-content:flex-end;gap:12px;padding-top:16px;border-top:1px solid var(--border);">
-              <button class="btn-ghost" style="text-transform:uppercase;font-size:12px;letter-spacing:.4px;">Descartar Alterações</button>
-              <button class="btn btn-cyan" onclick="saveConfig()">Implantar Configuração</button>
+            <!-- Ações -->
+            <div style="display:flex;align-items:center;justify-content:space-between;padding-top:16px;border-top:1px solid var(--border);">
+              <!-- Reset -->
+              <button onclick="confirmReset()" style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:8px;border:1px solid rgba(255,75,110,.3);background:rgba(255,75,110,.08);color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.3px;transition:all .15s;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
+                Resetar Configurações
+              </button>
+              <div style="display:flex;gap:10px;">
+                <button class="btn-ghost" onclick="loadCurrentSettings()" style="font-size:12px;">Descartar</button>
+                <button class="btn btn-cyan" onclick="saveConfig()">Salvar Configurações</button>
+              </div>
+            </div>
+
+            <!-- Modal de confirmação de reset -->
+            <div id="resetModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center;">
+              <div style="background:var(--bg-3);border:1px solid var(--border);border-radius:16px;padding:28px;width:380px;text-align:center;">
+                <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
+                <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px;">Resetar Configurações?</div>
+                <div style="font-size:13px;color:var(--text-2);line-height:1.5;margin-bottom:24px;">Todas as configurações serão apagadas e o assistente de configuração inicial será exibido novamente.</div>
+                <div style="display:flex;gap:10px;justify-content:center;">
+                  <button onclick="closeResetModal()" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border);background:var(--bg-4);color:var(--text-2);font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;">Cancelar</button>
+                  <button onclick="doReset()" style="padding:10px 24px;border-radius:8px;border:none;background:var(--danger,#ff4b6e);color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:700;cursor:pointer;">Sim, Resetar</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -264,14 +321,109 @@ export async function renderDashboard(): Promise<void> {
     const inp = document.getElementById('keyInput') as HTMLInputElement;
     inp.type = inp.type === 'password' ? 'text' : 'password';
   };
-  (window as any).saveConfig = async () => {
-    const port = parseInt((document.getElementById('portInput') as HTMLInputElement).value);
-    await invoke('save_settings', {
-      hostname: '', role: 'server', serverAddr: null,
-      port, pskHex: '', peerPosition: 'right', autostart: false, theme: 'dark'
-    }).catch(console.warn);
-    addLog("Configuração implantada.", "sec");
+  // ── Configurações ──────────────────────────────────────────────────────────
+
+  let currentRole = 'server';
+
+  const loadCurrentSettings = async () => {
+    try {
+      const s = await invoke<any>('get_settings');
+      currentRole = s.role ?? 'server';
+      applyRoleUI(currentRole);
+
+      const addrInput = document.getElementById('serverAddrInput') as HTMLInputElement;
+      if (addrInput && s.server_addr) addrInput.value = s.server_addr;
+
+      const keyInput = document.getElementById('keyInput') as HTMLInputElement;
+      if (keyInput && s.psk_hex) {
+        // Mostrar PSK formatada em grupos de 4
+        keyInput.value = s.psk_hex;
+      }
+
+      const portInput = document.getElementById('portInput') as HTMLInputElement;
+      if (portInput) portInput.value = String(s.port ?? 24800);
+    } catch { /* fora do Tauri */ }
   };
+
+  const applyRoleUI = (role: string) => {
+    const serverCard = document.getElementById('roleServerCard');
+    const clientCard = document.getElementById('roleClientCard');
+    const addrSection = document.getElementById('serverAddrSection');
+    if (!serverCard || !clientCard || !addrSection) return;
+
+    if (role === 'server') {
+      serverCard.style.cssText = serverCard.style.cssText.replace(/border:[^;]+/, 'border:2px solid var(--cyan)');
+      serverCard.style.background = 'linear-gradient(135deg,#0f1824,#0b0c10)';
+      clientCard.style.cssText = clientCard.style.cssText.replace(/border:[^;]+/, 'border:1.5px solid var(--border)');
+      clientCard.style.background = 'var(--bg-3)';
+      addrSection.style.display = 'none';
+    } else {
+      clientCard.style.cssText = clientCard.style.cssText.replace(/border:[^;]+/, 'border:2px solid var(--cyan)');
+      clientCard.style.background = 'linear-gradient(135deg,#0f1824,#0b0c10)';
+      serverCard.style.cssText = serverCard.style.cssText.replace(/border:[^;]+/, 'border:1.5px solid var(--border)');
+      serverCard.style.background = 'var(--bg-3)';
+      addrSection.style.display = 'block';
+    }
+  };
+
+  (window as any).loadCurrentSettings = loadCurrentSettings;
+
+  (window as any).selectRoleCard = async (role: string) => {
+    currentRole = role;
+    applyRoleUI(role);
+    await invoke('set_role', { role }).catch(console.warn);
+    addLog(`Papel alterado para: ${role === 'server' ? 'Servidor' : 'Cliente'}`, 'sec');
+  };
+
+  (window as any).applyServerAddr = async () => {
+    const input = document.getElementById('serverAddrInput') as HTMLInputElement;
+    const addr = input?.value.trim() || null;
+    await invoke('set_server_addr', { addr }).catch(console.warn);
+    addLog(`Endereço do servidor: ${addr ?? '(removido)'}`, 'info');
+  };
+
+  (window as any).confirmReset = () => {
+    const modal = document.getElementById('resetModal')!;
+    modal.style.display = 'flex';
+  };
+
+  (window as any).closeResetModal = () => {
+    const modal = document.getElementById('resetModal')!;
+    modal.style.display = 'none';
+  };
+
+  (window as any).doReset = async () => {
+    try {
+      await invoke('reset_settings');
+      addLog("Configurações resetadas. Reiniciando...", "warn");
+      setTimeout(() => window.location.reload(), 800);
+    } catch(e) {
+      addLog(`Erro ao resetar: ${e}`, 'warn');
+    }
+  };
+
+  (window as any).saveConfig = async () => {
+    const port = parseInt((document.getElementById('portInput') as HTMLInputElement).value) || 24800;
+    try {
+      const s = await invoke<any>('get_settings');
+      await invoke('save_settings', {
+        hostname: s.hostname,
+        role: currentRole,
+        serverAddr: (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null,
+        port,
+        pskHex: s.psk_hex,
+        peerPosition: s.peer_position ?? 'right',
+        autostart: s.autostart ?? false,
+        theme: s.theme ?? 'dark',
+      });
+      addLog("Configurações salvas com sucesso.", "sec");
+    } catch(e) {
+      addLog(`Erro ao salvar: ${e}`, 'warn');
+    }
+  };
+
+  // Carregar configurações atuais ao abrir a página
+  await loadCurrentSettings();
 
   document.getElementById('btnConnect')?.addEventListener('click', async () => {
     addLog("Iniciando conexão...", "info");
