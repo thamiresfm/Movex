@@ -635,10 +635,127 @@ export async function renderDashboard(): Promise<void> {
   document.getElementById('btnConnect')?.addEventListener('click', async () => {
     addLog("Iniciando conexão...", "info");
     await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
-    // Garantir que estamos no Painel
     const navEl = document.getElementById('nav-painel');
     if (navEl) (window as any).navTo('painel', navEl);
   });
+
+  // ── Drag-and-drop de arquivos ──────────────────────────────────────────────
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const overlay = document.getElementById('dropOverlay');
+    if (overlay) overlay.style.display = 'flex';
+  });
+
+  document.addEventListener('dragleave', (e) => {
+    if (e.clientX === 0 && e.clientY === 0) {
+      const overlay = document.getElementById('dropOverlay');
+      if (overlay) overlay.style.display = 'none';
+    }
+  });
+
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    const overlay = document.getElementById('dropOverlay');
+    if (overlay) overlay.style.display = 'none';
+
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length === 0) return;
+
+    // Em Tauri, usar tauri://drop event — aqui pegamos os paths via file.name
+    // A API real de path vem do evento tauri drag-and-drop
+    const paths = files.map(f => (f as any).path ?? f.name).filter(Boolean);
+    if (paths.length === 0) {
+      addLog('Arraste arquivos do sistema de arquivos para transferir.', 'warn');
+      return;
+    }
+
+    addLog(`Transferindo ${paths.length} arquivo(s)...`, 'info');
+    const count = await invoke<number>('drop_file_to_peer', { paths }).catch((e: unknown) => {
+      addLog(`Erro no drop: ${e}`, 'warn');
+      return 0;
+    });
+    if (count > 0) addLog(`${count} arquivo(s) em transferência.`, 'sec');
+  });
+
+  // Overlay de drop
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="dropOverlay" style="
+      display:none;position:fixed;inset:0;z-index:9998;
+      background:rgba(0,212,255,.08);
+      border:3px dashed var(--cyan);
+      align-items:center;justify-content:center;
+      pointer-events:none;
+    ">
+      <div style="text-align:center;color:var(--cyan);">
+        <div style="font-size:48px;margin-bottom:12px;">📁</div>
+        <div style="font-size:18px;font-weight:700;">Soltar para transferir ao peer</div>
+      </div>
+    </div>
+  `);
+
+  // Tauri drag-and-drop real
+  try {
+    const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+    const webview = getCurrentWebviewWindow();
+    await webview.onDragDropEvent(async (event) => {
+      if (event.payload.type === 'drop') {
+        const paths = event.payload.paths ?? [];
+        if (paths.length === 0) return;
+        addLog(`Transferindo ${paths.length} arquivo(s) via drag-and-drop...`, 'info');
+        const count = await invoke<number>('drop_file_to_peer', { paths }).catch(() => 0);
+        if (count > 0) addLog(`${count} arquivo(s) enviado(s).`, 'sec');
+        else addLog('Nenhum arquivo foi transferido.', 'warn');
+      }
+    });
+  } catch { /* API não disponível */ }
+
+  // ── Borda luminosa no monitor ativo ──────────────────────────────────────
+  let borderActive = false;
+  const updateScreenBorder = async (connected: boolean, isRemote: boolean) => {
+    const shouldShow = connected && isRemote; // cliente com cursor do servidor
+    if (shouldShow !== borderActive) {
+      borderActive = shouldShow;
+      await invoke('set_screen_border', {
+        active: shouldShow,
+        color: '#00d4ff',
+      }).catch(() => {});
+    }
+  };
+
+  // ── Verificar atualização ao iniciar ──────────────────────────────────────
+  setTimeout(async () => {
+    try {
+      const version = await invoke<string | null>('check_for_update');
+      if (version) {
+        addLog(`Nova versão disponível: v${version}`, 'sec');
+        showUpdateNotification(version);
+      }
+    } catch { /* atualizações indisponíveis */ }
+  }, 5000);
+
+  const showUpdateNotification = (version: string) => {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="updateBanner" style="
+        position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+        background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;
+        padding:14px 20px;display:flex;align-items:center;gap:16px;
+        z-index:9997;box-shadow:0 4px 24px rgba(0,212,255,.15);
+      ">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--text);">🆕 Movex v${version} disponível</div>
+          <div style="font-size:11px;color:var(--text-3);">Clique para instalar e reiniciar</div>
+        </div>
+        <button onclick="installUpdate()" class="btn btn-cyan" style="white-space:nowrap;font-size:11px;">Instalar</button>
+        <button onclick="document.getElementById('updateBanner')?.remove()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+    `);
+  };
+
+  (window as any).installUpdate = async () => {
+    addLog('Baixando e instalando atualização...', 'sec');
+    document.getElementById('updateBanner')?.remove();
+    await invoke('install_update').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+  };
 
   // ── Transferência de arquivos ───────────────────────────────────────────────
   (window as any).sendFileDialog = async () => {
@@ -873,6 +990,14 @@ async function updateStatus() {
     }
 
     updateDevices(status, settings);
+
+    // Borda luminosa — ativa no cliente quando cursor está nesta máquina
+    const isClient = settings.role === 'client';
+    const isRemoteActive = status.active_screen === 'Remote';
+    // Borda ciano quando servidor está controlando esta tela (cliente ativo)
+    if (typeof updateScreenBorder === 'function') {
+      updateScreenBorder(status.connected, isClient && isRemoteActive);
+    }
 
     // Estatísticas reais
     try {

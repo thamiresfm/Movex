@@ -206,16 +206,17 @@ async fn run_session<S>(
                 }
             }
 
-            // Verificar clipboard periodicamente e sincronizar se mudou
+            // Verificar clipboard periodicamente — texto E imagens
             _ = clipboard_check.tick() => {
-                if let Some(text) = crate::clipboard::sync::read_clipboard() {
-                    let changed = last_clipboard.as_ref().map_or(true, |prev| prev != &text);
+                if let Some(msg) = crate::clipboard::sync::create_clipboard_message() {
+                    // Verificar se mudou baseado no mime+tamanho
+                    let key = match &msg {
+                        Message::ClipboardData { mime, data } => format!("{}:{}", mime, data.len()),
+                        _ => continue,
+                    };
+                    let changed = last_clipboard.as_ref().map_or(true, |prev| prev != &key);
                     if changed {
-                        last_clipboard = Some(text.clone());
-                        let msg = Message::ClipboardData {
-                            mime: "text/plain".to_string(),
-                            data: text.into_bytes(),
-                        };
+                        last_clipboard = Some(key);
                         if send_message(stream, &msg).await.is_err() { break; }
                     }
                 }
@@ -228,6 +229,8 @@ async fn run_session<S>(
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Remote;
                         info!("Cursor entrou nesta máquina");
+                        // A borda luminosa é gerenciada pelo frontend via set_screen_border
+                        // Aqui apenas emitimos o estado para o frontend reagir
                     }
                     Ok(Message::LeaveScreen) => {
                         let mut active = state.active_screen.lock().await;

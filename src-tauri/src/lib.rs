@@ -490,6 +490,131 @@ async fn clear_recent_peers(state: State<'_, SharedState>) -> Result<(), String>
     s.save()
 }
 
+/// Retorna lista de monitores detectados localmente
+#[tauri::command]
+fn get_monitors() -> Vec<crate::screen::layout::Monitor> {
+    crate::screen::layout::detect_monitors().monitors
+}
+
+/// Envia arquivo ao peer via drag-and-drop ou caminho direto
+#[tauri::command]
+async fn drop_file_to_peer(
+    state: State<'_, SharedState>,
+    paths: Vec<String>,
+) -> Result<u32, String> {
+    let tx = state.message_tx.lock().await.clone()
+        .ok_or_else(|| "Não há conexão ativa".to_string())?;
+
+    let mut count = 0u32;
+    for path_str in paths {
+        let path = std::path::Path::new(&path_str).to_path_buf();
+        if !path.exists() { continue; }
+
+        let transfer_id = state.next_transfer_id().await;
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let file_size = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
+
+        {
+            let mut transfers = state.transfers.lock().await;
+            transfers.insert(transfer_id, crate::transfer::TransferProgress {
+                id: transfer_id,
+                name: file_name.clone(),
+                total_bytes: file_size,
+                sent_bytes: 0,
+                direction: crate::transfer::TransferDirection::Sending,
+            });
+        }
+
+        let tx_clone = tx.clone();
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            match send_file_via_channel(&path, transfer_id, file_size, file_name.clone(), &tx_clone).await {
+                Ok(_) => { state_clone.stats.inc_file_sent(); }
+                Err(e) => tracing::error!("drop_file_to_peer: {}", e),
+            }
+            state_clone.transfers.lock().await.remove(&transfer_id);
+        });
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Verifica se há atualização disponível
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    match app.updater() {
+        Ok(updater) => {
+            match updater.check().await {
+                Ok(Some(update)) => Ok(Some(update.version.to_string())),
+                Ok(None) => Ok(None),
+                Err(e) => {
+                    tracing::warn!("Erro ao verificar atualizações: {}", e);
+                    Ok(None)
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Updater não disponível: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Instala a atualização disponível
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
+        update.download_and_install(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Ativa/desativa borda luminosa no monitor (overlay CSS)
+/// O frontend aplica a borda via postMessage ao WebView
+#[tauri::command]
+async fn set_screen_border(
+    app: tauri::AppHandle,
+    active: bool,
+    color: String,
+) -> Result<(), String> {
+    if let Some(win) = tauri::Manager::get_webview_window(&app, "main") {
+        let script = format!(
+            r#"
+            (function() {{
+                const existing = document.getElementById('__movex_border__');
+                if (existing) existing.remove();
+                if ({active}) {{
+                    const div = document.createElement('div');
+                    div.id = '__movex_border__';
+                    div.style.cssText = `
+                        position: fixed;
+                        inset: 0;
+                        pointer-events: none;
+                        z-index: 999999;
+                        border: 4px solid {color};
+                        box-shadow: inset 0 0 12px {color}88, 0 0 12px {color}44;
+                        animation: movex_pulse 1.5s ease-in-out infinite;
+                    `;
+                    const style = document.createElement('style');
+                    style.textContent = '@keyframes movex_pulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.6; }} }}';
+                    document.head.appendChild(style);
+                    document.body.appendChild(div);
+                }}
+            }})();
+            "#,
+            active = active,
+            color = color,
+        );
+        win.eval(&script).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -512,6 +637,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shared_state.clone())
         .setup(move |app| {
             // ── System Tray ──────────────────────────────────────────────────
@@ -626,6 +752,11 @@ pub fn run() {
             update_preferences,
             get_recent_peers,
             clear_recent_peers,
+            get_monitors,
+            drop_file_to_peer,
+            check_for_update,
+            install_update,
+            set_screen_border,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");
