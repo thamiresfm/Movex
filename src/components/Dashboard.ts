@@ -328,6 +328,121 @@ export async function renderDashboard(): Promise<void> {
     </div>
   `;
 
+  // ── Modal de aprovação de conexão (overlay global) ───────────────────────
+  const approvalModalHtml = `
+    <div id="approvalOverlay" style="
+      display:none;
+      position:fixed;inset:0;z-index:9999;
+      background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
+      align-items:center;justify-content:center;
+    ">
+      <div style="
+        background:var(--bg-3);
+        border:1px solid var(--border-c);
+        border-radius:20px;
+        padding:32px 28px;
+        width:400px;
+        text-align:center;
+        box-shadow:0 0 40px rgba(0,212,255,.15);
+      ">
+        <div style="font-size:48px;margin-bottom:16px;">🖥️</div>
+        <div style="font-size:18px;font-weight:800;color:var(--text);margin-bottom:6px;">
+          Solicitação de Conexão
+        </div>
+        <div style="font-size:14px;color:var(--text-2);margin-bottom:6px;">
+          O computador
+        </div>
+        <div id="approvalHostname" style="
+          font-size:22px;font-weight:700;color:var(--cyan);
+          background:var(--cyan-dim);border:1px solid var(--border-c);
+          border-radius:10px;padding:10px 18px;
+          margin-bottom:12px;letter-spacing:.5px;
+        ">—</div>
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:28px;line-height:1.5;">
+          quer controlar seu teclado e mouse.<br>
+          <span style="color:var(--text-3);font-size:11px;">Você terá controle total para desconectar a qualquer momento.</span>
+        </div>
+        <div style="display:flex;gap:12px;justify-content:center;">
+          <button onclick="rejectConn()" style="
+            flex:1;padding:13px;border-radius:10px;
+            background:rgba(255,75,110,.12);border:1px solid rgba(255,75,110,.3);
+            color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;
+            font-size:14px;font-weight:700;cursor:pointer;
+            transition:all .15s;
+          ">✕ Recusar</button>
+          <button onclick="approveConn()" style="
+            flex:1;padding:13px;border-radius:10px;
+            background:var(--cyan);border:none;
+            color:#0b0c10;font-family:'Inter',sans-serif;
+            font-size:14px;font-weight:700;cursor:pointer;
+            transition:filter .15s;
+          ">✓ Permitir</button>
+        </div>
+        <div id="approvalCountdown" style="margin-top:16px;font-size:11px;color:var(--text-3);">
+          Recusa automática em 60s
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', approvalModalHtml);
+
+  let approvalCountdownTimer: ReturnType<typeof setInterval> | null = null;
+  let approvalSeconds = 60;
+
+  const showApprovalModal = (hostname: string) => {
+    const overlay = document.getElementById('approvalOverlay')!;
+    const hostnameEl = document.getElementById('approvalHostname')!;
+    const countdown = document.getElementById('approvalCountdown')!;
+    hostnameEl.textContent = hostname;
+    overlay.style.display = 'flex';
+    approvalSeconds = 60;
+    countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
+    if (approvalCountdownTimer) clearInterval(approvalCountdownTimer);
+    approvalCountdownTimer = setInterval(() => {
+      approvalSeconds--;
+      countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
+      if (approvalSeconds <= 0) {
+        clearInterval(approvalCountdownTimer!);
+        hideApprovalModal();
+      }
+    }, 1000);
+  };
+
+  const hideApprovalModal = () => {
+    const overlay = document.getElementById('approvalOverlay');
+    if (overlay) overlay.style.display = 'none';
+    if (approvalCountdownTimer) { clearInterval(approvalCountdownTimer); approvalCountdownTimer = null; }
+  };
+
+  (window as any).approveConn = async () => {
+    hideApprovalModal();
+    await invoke('approve_connection').catch(console.warn);
+    addLog('Conexão aprovada ✓', 'sec');
+  };
+
+  (window as any).rejectConn = async () => {
+    hideApprovalModal();
+    await invoke('reject_connection').catch(console.warn);
+    addLog('Conexão recusada ✕', 'warn');
+  };
+
+  // Polling para detectar solicitações de conexão pendentes
+  let lastPending: string | null = null;
+  const checkPendingApproval = async () => {
+    try {
+      const pending = await invoke<string | null>('get_pending_approval');
+      if (pending && pending !== lastPending) {
+        lastPending = pending;
+        showApprovalModal(pending);
+        addLog(`Solicitação de conexão de: ${pending}`, 'warn');
+      } else if (!pending && lastPending) {
+        lastPending = null;
+        hideApprovalModal();
+      }
+    } catch { /* fora do Tauri */ }
+  };
+  setInterval(checkPendingApproval, 500);
+
   // Inicializar
   await updateStatus();
   setInterval(updateStatus, 3000);

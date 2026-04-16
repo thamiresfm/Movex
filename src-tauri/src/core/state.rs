@@ -50,6 +50,10 @@ pub struct AppState {
     pub transfers: Arc<Mutex<HashMap<u32, TransferProgress>>>,
     /// Próximo ID de transferência
     pub next_transfer_id: Arc<Mutex<u32>>,
+    /// Hostname do cliente aguardando aprovação (Some = aguardando, None = nenhum)
+    pub pending_approval: Arc<Mutex<Option<String>>>,
+    /// Canal para enviar decisão de aprovação (true = aceitar, false = rejeitar)
+    pub approval_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 impl AppState {
@@ -63,6 +67,8 @@ impl AppState {
             session_started_at: Arc::new(Mutex::new(None)),
             transfers: Arc::new(Mutex::new(HashMap::new())),
             next_transfer_id: Arc::new(Mutex::new(1)),
+            pending_approval: Arc::new(Mutex::new(None)),
+            approval_tx: Arc::new(Mutex::new(None)),
         }
     }
 

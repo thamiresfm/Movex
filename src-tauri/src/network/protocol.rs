@@ -31,6 +31,14 @@ pub enum Message {
     Ping,
     Pong,
     Disconnect { reason: String },
+
+    // Aprovação de conexão
+    /// Servidor aguarda aprovação do usuário antes de aceitar
+    ConnectionPending { hostname: String },
+    /// Usuário aprovou a conexão
+    ConnectionApproved,
+    /// Usuário rejeitou a conexão
+    ConnectionRejected { reason: String },
 }
 
 pub const FILE_CHUNK_SIZE: usize = 64 * 1024;

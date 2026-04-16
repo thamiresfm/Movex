@@ -325,6 +325,32 @@ async fn send_file_via_channel(
     Ok(())
 }
 
+/// Retorna o hostname do cliente aguardando aprovação (None = nenhum)
+#[tauri::command]
+async fn get_pending_approval(state: State<'_, SharedState>) -> Result<Option<String>, String> {
+    Ok(state.pending_approval.lock().await.clone())
+}
+
+/// Aprova a conexão pendente
+#[tauri::command]
+async fn approve_connection(state: State<'_, SharedState>) -> Result<(), String> {
+    let tx = state.approval_tx.lock().await.take()
+        .ok_or_else(|| "Nenhuma conexão aguardando aprovação".to_string())?;
+    tx.send(true).map_err(|_| "Erro ao enviar aprovação".to_string())?;
+    tracing::info!("Conexão aprovada pelo usuário");
+    Ok(())
+}
+
+/// Rejeita a conexão pendente
+#[tauri::command]
+async fn reject_connection(state: State<'_, SharedState>) -> Result<(), String> {
+    let tx = state.approval_tx.lock().await.take()
+        .ok_or_else(|| "Nenhuma conexão aguardando aprovação".to_string())?;
+    tx.send(false).map_err(|_| "Erro ao enviar rejeição".to_string())?;
+    tracing::info!("Conexão rejeitada pelo usuário");
+    Ok(())
+}
+
 /// Retorna lista de transferências em andamento
 #[tauri::command]
 async fn get_transfers(
@@ -394,6 +420,9 @@ pub fn run() {
             connect_to_peer,
             send_file_to_peer,
             get_transfers,
+            get_pending_approval,
+            approve_connection,
+            reject_connection,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

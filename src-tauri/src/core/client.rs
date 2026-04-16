@@ -69,6 +69,44 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             continue;
                         }
 
+                        // Pode receber ConnectionPending antes do HelloAck
+                        let first_msg = recv_message(&mut tls).await;
+
+                        // Tratar ConnectionPending — aguardar aprovação
+                        let first_msg = match first_msg {
+                            Ok(Message::ConnectionPending { hostname: server_name }) => {
+                                info!("Aguardando aprovação do servidor '{}'...", server_name);
+                                {
+                                    let mut status = state.connection_status.lock().await;
+                                    *status = ConnectionStatus::Connecting;
+                                }
+                                // Aguardar próxima mensagem (aprovado ou rejeitado)
+                                recv_message(&mut tls).await
+                            }
+                            other => other,
+                        };
+
+                        match first_msg {
+                            Ok(Message::ConnectionRejected { reason }) => {
+                                warn!("Conexão rejeitada pelo servidor: {}", reason);
+                                {
+                                    let mut status = state.connection_status.lock().await;
+                                    *status = ConnectionStatus::Disconnected;
+                                }
+                                // Não tentar reconectar — foi rejeitado explicitamente
+                                return;
+                            }
+                            Ok(Message::ConnectionApproved) => {
+                                // Aprovado — agora vem o HelloAck
+                                info!("Conexão aprovada pelo servidor!");
+                            }
+                            // Pode ser que o servidor envie HelloAck diretamente (sem aprovação)
+                            _ => {
+                                // Tratar abaixo como HelloAck
+                            }
+                        }
+
+                        // Agora receber HelloAck
                         match recv_message(&mut tls).await {
                             Ok(Message::HelloAck { hostname: peer, .. }) => {
                                 info!("Conectado ao servidor: {}", peer);

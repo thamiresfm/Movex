@@ -120,7 +120,60 @@ async fn handle_client<S>(
         warn!("PSK não verificada para {} — permitindo (modo dev)", peer_addr);
     }
 
+    // ── Solicitar aprovação do usuário ──────────────────────────────────────
     let our_hostname = { state.settings.lock().await.hostname.clone() };
+
+    // Avisar o cliente que está aguardando aprovação
+    let _ = send_message(&mut stream, &Message::ConnectionPending {
+        hostname: our_hostname.clone(),
+    }).await;
+
+    // Registrar no estado para a UI exibir o modal
+    let (approval_tx, approval_rx) = tokio::sync::oneshot::channel::<bool>();
+    {
+        *state.pending_approval.lock().await = Some(peer_hostname.clone());
+        *state.approval_tx.lock().await = Some(approval_tx);
+    }
+
+    info!("Aguardando aprovação do usuário para conectar: {} ({})", peer_hostname, peer_addr);
+
+    // Aguardar decisão com timeout de 60 segundos
+    let approved = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        approval_rx,
+    ).await;
+
+    // Limpar estado pendente
+    {
+        *state.pending_approval.lock().await = None;
+        *state.approval_tx.lock().await = None;
+    }
+
+    match approved {
+        Ok(Ok(true)) => {
+            // Aprovado — enviar HelloAck
+            info!("Conexão aprovada: {} ({})", peer_hostname, peer_addr);
+            let _ = send_message(&mut stream, &Message::ConnectionApproved).await;
+        }
+        Ok(Ok(false)) => {
+            // Rejeitado pelo usuário
+            warn!("Conexão rejeitada pelo usuário: {} ({})", peer_hostname, peer_addr);
+            let _ = send_message(&mut stream, &Message::ConnectionRejected {
+                reason: "Conexão recusada pelo usuário do servidor".to_string(),
+            }).await;
+            return;
+        }
+        _ => {
+            // Timeout ou canal fechado
+            warn!("Timeout na aprovação de conexão: {} ({})", peer_hostname, peer_addr);
+            let _ = send_message(&mut stream, &Message::ConnectionRejected {
+                reason: "Tempo de aprovação esgotado (60s)".to_string(),
+            }).await;
+            return;
+        }
+    }
+
+    // Agora enviar HelloAck
     let _ = send_message(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,
         hostname: our_hostname,
