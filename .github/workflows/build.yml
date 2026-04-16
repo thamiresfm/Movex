@@ -13,11 +13,11 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────
-  # Job 1: Testes Rust (Ubuntu — mais rápido e barato)
+  # Job 1: Testes Rust (Ubuntu 24.04 — webkit2gtk-4.1 + soup3)
   # ──────────────────────────────────────────────────────────────
   test:
     name: Testes Rust
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,15 +32,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ubuntu-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-cargo-
+          key: ubuntu24-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu24-cargo-
 
-      - name: Instalar dependências do sistema (Ubuntu 22.04)
+      - name: Instalar dependências do sistema (Ubuntu 24.04)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
-            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
