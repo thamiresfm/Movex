@@ -361,6 +361,9 @@ async fn connect_to_peer(
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn run() {
+    // Instalar o CryptoProvider do rustls antes de qualquer conexão TLS
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
