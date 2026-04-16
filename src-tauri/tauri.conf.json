@@ -38,6 +38,15 @@
     ],
     "category": "Utility",
     "shortDescription": "KVM por software — controle múltiplos computadores com um teclado e mouse",
-    "longDescription": "Movex permite usar um único teclado e mouse para controlar múltiplos computadores pela rede local, com transferência de arquivos e sincronização de clipboard."
+    "longDescription": "Movex permite usar um único teclado e mouse para controlar múltiplos computadores pela rede local, com transferência de arquivos e sincronização de clipboard.",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
   }
 }
