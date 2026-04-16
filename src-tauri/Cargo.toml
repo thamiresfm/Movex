@@ -2,6 +2,13 @@
 name = "movex"
 version = "0.1.0"
 edition = "2021"
+description = "KVM por software — controle múltiplos computadores com um teclado e mouse"
+authors = ["Thamires Fernandes Mendes"]
+license = "MIT"
+repository = "https://github.com/thamiresfm/Movex"
+
+[package.metadata.bundle]
+icon = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
 
 [lib]
 name = "movex_lib"
