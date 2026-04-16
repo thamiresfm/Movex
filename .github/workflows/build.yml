@@ -94,21 +94,27 @@ jobs:
         env:
           RUST_LOG: warn
 
-      - name: Listar TODOS os artefatos gerados
+      - name: Listar e copiar artefatos para pasta fixa
         run: |
-          echo "=== Estrutura completa do bundle ==="
-          find src-tauri/target -name "*.dmg" -o -name "*.app" -o -name "*.pkg" 2>/dev/null | head -40 || echo "Nenhum artefato encontrado"
-          echo ""
-          echo "=== Diretórios release/bundle ==="
-          find src-tauri/target -type d -name "bundle" 2>/dev/null | head -10
+          echo "=== Todos os arquivos de bundle gerados ==="
+          find src-tauri/target -name "*.dmg" -o -name "*.app" -o -name "*.pkg" 2>/dev/null | head -40
 
-      - name: Upload artefatos macOS (todos os formatos)
+          echo ""
+          echo "=== Diretórios bundle encontrados ==="
+          find src-tauri/target -type d -name "bundle" 2>/dev/null
+
+          # Copiar todos os .dmg para pasta fixa de upload
+          mkdir -p artifacts-macos
+          find src-tauri/target -name "*.dmg" -exec cp {} artifacts-macos/ \; 2>/dev/null
+          echo ""
+          echo "=== Artefatos copiados para artifacts-macos/ ==="
+          ls -la artifacts-macos/ || echo "(vazio)"
+
+      - name: Upload artefatos macOS
         uses: actions/upload-artifact@v5
         with:
           name: Movex-macOS
-          path: |
-            src-tauri/target/**/release/bundle/dmg/*.dmg
-            src-tauri/target/**/release/bundle/macos/*.app
+          path: artifacts-macos/
           if-no-files-found: warn
           retention-days: 7
 
