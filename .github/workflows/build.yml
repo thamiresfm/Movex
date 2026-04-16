@@ -151,9 +151,28 @@ jobs:
           echo "id=$RELEASE_ID" >> $GITHUB_OUTPUT
           echo "Release ID: $RELEASE_ID"
 
+      - name: Decodificar certificado de assinatura
+        shell: pwsh
+        run: |
+          $cert = "${{ secrets.WINDOWS_CERTIFICATE }}"
+          $certBytes = [Convert]::FromBase64String($cert)
+          [IO.File]::WriteAllBytes("$env:TEMP\movex-cert.pfx", $certBytes)
+          Write-Host "Certificado decodificado."
+
+      - name: Instalar certificado no Windows
+        shell: pwsh
+        run: |
+          $pwd = ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force
+          Import-PfxCertificate -FilePath "$env:TEMP\movex-cert.pfx" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $pwd
+          Write-Host "Certificado instalado."
+
       - name: Build e upload Windows
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           releaseId: ${{ steps.get_release.outputs.id }}

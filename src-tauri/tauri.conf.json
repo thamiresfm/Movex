@@ -44,6 +44,7 @@
     },
     "windows": {
       "digestAlgorithm": "sha256",
+      "certificateThumbprint": null,
       "webviewInstallMode": {
         "type": "offlineInstaller"
       }
