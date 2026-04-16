@@ -1,3 +1,9 @@
+// Módulos implementados mas ainda não totalmente conectados ao runtime —
+// os warnings são esperados e serão removidos conforme as features forem integradas.
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 mod clipboard;
 mod config;
 mod core;
@@ -83,7 +89,7 @@ async fn save_settings(
     server_addr: Option<String>,
     port: u16,
     psk_hex: String,
-    peer_position: String,
+    _peer_position: String,
     autostart: bool,
     theme: String,
 ) -> Result<(), String> {
