@@ -1,11 +1,19 @@
+use std::sync::OnceLock;
 use crate::input::events::InputEvent;
-use crate::input::platform::create_injector;
+use crate::input::platform::{create_injector, InputInjector};
 use tracing::error;
 
-/// Injeta um evento de input no SO local como se fosse físico.
+/// Injector singleton — criado uma única vez, reutilizado em todas as chamadas
+/// Evita alocação de Box<dyn InputInjector> a cada evento (centenas por segundo)
+static INJECTOR: OnceLock<Box<dyn InputInjector>> = OnceLock::new();
+
+fn get_injector() -> &'static dyn InputInjector {
+    INJECTOR.get_or_init(create_injector).as_ref()
+}
+
+/// Injeta um evento de input no SO local como se fosse físico
 pub fn inject_event(event: InputEvent) {
-    let injector = create_injector();
-    if let Err(e) = injector.inject(event) {
-        error!("Falha ao injetar evento de input: {}", e);
+    if let Err(e) = get_injector().inject(event) {
+        error!("Falha ao injetar evento: {}", e);
     }
 }

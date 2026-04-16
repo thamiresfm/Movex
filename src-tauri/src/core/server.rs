@@ -200,6 +200,12 @@ async fn handle_client<S>(
         warn!("Captura de input indisponível: {} — verifique permissão de Acessibilidade", e);
     }
 
+    // ── Receptor de arquivos ────────────────────────────────────────────────
+    let mut file_receiver = match crate::transfer::FileReceiver::new().await {
+        Ok(r) => Some(r),
+        Err(e) => { tracing::warn!("FileReceiver indisponível: {}", e); None }
+    };
+
     // ── Loop principal: ler mensagens do cliente + enviar do canal ─────────
     let ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
     tokio::pin!(ping_interval);
@@ -252,8 +258,34 @@ async fn handle_client<S>(
                         break;
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
-                        // Clipboard recebido do cliente — aplicar localmente
                         crate::clipboard::sync::apply_clipboard_message(msg);
+                    }
+                    Ok(Message::FileStart { id, name, size }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            recv.on_file_start(id, name, size).await.unwrap_or_else(|e| {
+                                warn!("FileStart error: {}", e);
+                            });
+                        }
+                    }
+                    Ok(Message::FileChunk { id, seq, data }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            recv.on_file_chunk(id, seq, data).await.unwrap_or_else(|e| {
+                                warn!("FileChunk error: {}", e);
+                            });
+                        }
+                    }
+                    Ok(Message::FileEnd { id, checksum }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            match recv.on_file_end(id, checksum).await {
+                                Ok((name, path)) => {
+                                    info!("Arquivo recebido: '{}' → {:?}", name, path);
+                                }
+                                Err(e) => {
+                                    warn!("FileEnd error: {}", e);
+                                    let _ = send_message(&mut stream, &Message::FileRetry { id }).await;
+                                }
+                            }
+                        }
                     }
                     Ok(_) => {}
                     Err(e) => {

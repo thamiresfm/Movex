@@ -1,8 +1,10 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use crate::config::Settings;
 use crate::network::protocol::Message;
+use crate::transfer::TransferProgress;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
@@ -40,10 +42,14 @@ pub struct AppState {
     pub active_screen: Arc<Mutex<ActiveScreen>>,
     /// Token para cancelar a task de conexão em andamento
     pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
-    /// Canal para enviar mensagens ao peer conectado (servidor → cliente)
+    /// Canal para enviar mensagens ao peer conectado
     pub message_tx: Arc<Mutex<Option<mpsc::Sender<Message>>>>,
     /// Timestamp de início da sessão (para uptime real)
     pub session_started_at: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Transferências de arquivo em andamento (id → progresso)
+    pub transfers: Arc<Mutex<HashMap<u32, TransferProgress>>>,
+    /// Próximo ID de transferência
+    pub next_transfer_id: Arc<Mutex<u32>>,
 }
 
 impl AppState {
@@ -55,7 +61,17 @@ impl AppState {
             cancel_token: Arc::new(Mutex::new(None)),
             message_tx: Arc::new(Mutex::new(None)),
             session_started_at: Arc::new(Mutex::new(None)),
+            transfers: Arc::new(Mutex::new(HashMap::new())),
+            next_transfer_id: Arc::new(Mutex::new(1)),
         }
+    }
+
+    /// Gera próximo ID de transferência (thread-safe)
+    pub async fn next_transfer_id(&self) -> u32 {
+        let mut id = self.next_transfer_id.lock().await;
+        let current = *id;
+        *id = id.wrapping_add(1).max(1);
+        current
     }
 
     /// Cancela qualquer task de conexão ativa

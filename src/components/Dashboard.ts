@@ -138,11 +138,20 @@ export async function renderDashboard(): Promise<void> {
                   <div class="section-sub">Arraste os ícones para mapear as posições físicas dos monitores</div>
                 </div>
                 <div style="display:flex;gap:10px;">
-                  <button class="btn btn-outline">Redefinir Layout</button>
+                  <button class="btn btn-outline" onclick="sendFileDialog()">📁 Enviar Arquivo</button>
+                  <button class="btn btn-outline" id="btnDisconnect" style="display:none;" onclick="doDisconnect()">Desconectar</button>
                   <button class="btn btn-cyan" id="btnConnect">Conectar</button>
                 </div>
               </div>
               <div id="screenMap" style="display:flex;align-items:center;justify-content:center;gap:24px;padding:20px 0;"></div>
+            </div>
+
+            <!-- Transferências em andamento -->
+            <div id="transfersSection" style="display:none;margin-top:14px;">
+              <div class="card">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Transferências</div>
+                <div id="transfersList"></div>
+              </div>
             </div>
           </div>
 
@@ -458,6 +467,29 @@ export async function renderDashboard(): Promise<void> {
     await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
   });
 
+  // ── Transferência de arquivos ───────────────────────────────────────────────
+  (window as any).sendFileDialog = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        multiple: false,
+        title: 'Selecionar arquivo para enviar ao peer',
+      });
+      if (!selected) return;
+      const path = typeof selected === 'string' ? selected : (selected as any).path ?? selected;
+      addLog(`Enviando arquivo: ${path}...`, 'info');
+      await invoke('send_file_to_peer', { path });
+      addLog('Transferência iniciada.', 'sec');
+    } catch (e) {
+      addLog(`Erro ao enviar arquivo: ${e}`, 'warn');
+    }
+  };
+
+  (window as any).doDisconnect = async () => {
+    await invoke('disconnect').catch(console.warn);
+    addLog('Desconectado.', 'info');
+  };
+
   // ── Descoberta mDNS ────────────────────────────────────────────────────────
   (window as any).refreshDevices = async () => {
     const btn = document.getElementById('btnRefreshDevices') as HTMLButtonElement;
@@ -552,6 +584,37 @@ async function updateStatus() {
     }
 
     updateDevices(status, settings);
+
+    // Botão conectar/desconectar
+    const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;
+    const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement;
+    if (btnConnect && btnDisconnect) {
+      btnConnect.style.display = status.connected ? 'none' : 'inline-flex';
+      btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
+    }
+
+    // Transferências em andamento
+    try {
+      const transfers = await invoke<any[]>('get_transfers');
+      const section = document.getElementById('transfersSection');
+      const list = document.getElementById('transfersList');
+      if (section && list) {
+        section.style.display = transfers.length > 0 ? 'block' : 'none';
+        list.innerHTML = transfers.map(t => `
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+            <span style="font-size:18px;">${t.direction === 'Sending' ? '📤' : '📥'}</span>
+            <div style="flex:1;">
+              <div style="font-size:13px;font-weight:600;color:var(--text);">${t.name}</div>
+              <div style="background:var(--bg-5);border-radius:3px;height:4px;margin-top:4px;">
+                <div style="background:var(--cyan);height:4px;border-radius:3px;width:${t.percent ?? 0}%;transition:width .3s;"></div>
+              </div>
+            </div>
+            <span style="font-size:11px;color:var(--text-3);">${t.percent ?? 0}%</span>
+          </div>
+        `).join('');
+      }
+    } catch { /* transferências indisponíveis */ }
+
   } catch { /* Tauri não disponível em browser */ }
 }
 

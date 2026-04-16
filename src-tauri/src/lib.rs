@@ -229,6 +229,111 @@ async fn discover_peers() -> Result<Vec<PeerInfo>, String> {
     }).collect())
 }
 
+/// Envia um arquivo ao peer conectado
+#[tauri::command]
+async fn send_file_to_peer(
+    state: State<'_, SharedState>,
+    path: String,
+) -> Result<(), String> {
+    use std::path::Path;
+
+    let tx = state.message_tx.lock().await.clone()
+        .ok_or_else(|| "Não há conexão ativa".to_string())?;
+
+    let transfer_id = state.next_transfer_id().await;
+    let path = Path::new(&path).to_path_buf();
+    let state_clone = state.inner().clone();
+
+    tokio::spawn(async move {
+        // Abrir arquivo e enviar via canal de mensagens
+        let file_name = path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let file_size = match tokio::fs::metadata(&path).await {
+            Ok(m) => m.len(),
+            Err(e) => {
+                tracing::error!("Erro ao ler arquivo '{}': {}", path.display(), e);
+                return;
+            }
+        };
+
+        // Registrar progresso
+        {
+            let mut transfers = state_clone.transfers.lock().await;
+            transfers.insert(transfer_id, crate::transfer::TransferProgress {
+                id: transfer_id,
+                name: file_name.clone(),
+                total_bytes: file_size,
+                sent_bytes: 0,
+                direction: crate::transfer::TransferDirection::Sending,
+            });
+        }
+
+        tracing::info!("Enviando '{}' ({} bytes) ao peer...", file_name, file_size);
+
+        // Enviar via canal: ler arquivo em chunks e enfileirar mensagens
+        match send_file_via_channel(&path, transfer_id, file_size, file_name.clone(), &tx).await {
+            Ok(_) => {
+                tracing::info!("Arquivo '{}' enviado com sucesso", file_name);
+                state_clone.transfers.lock().await.remove(&transfer_id);
+            }
+            Err(e) => {
+                tracing::error!("Erro ao enviar '{}': {}", file_name, e);
+                state_clone.transfers.lock().await.remove(&transfer_id);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Lê arquivo em chunks e enfileira mensagens no canal do peer
+async fn send_file_via_channel(
+    path: &std::path::Path,
+    id: u32,
+    size: u64,
+    name: String,
+    tx: &tokio::sync::mpsc::Sender<crate::network::protocol::Message>,
+) -> Result<(), String> {
+    use tokio::io::AsyncReadExt;
+    use sha2::{Digest, Sha256};
+
+    tx.send(crate::network::protocol::Message::FileStart { id, name, size })
+        .await.map_err(|e| e.to_string())?;
+
+    let mut file = tokio::fs::File::open(path).await.map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut seq = 0u32;
+    let mut buf = vec![0u8; crate::network::protocol::FILE_CHUNK_SIZE];
+
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        let chunk = buf[..n].to_vec();
+        hasher.update(&chunk);
+        tx.send(crate::network::protocol::Message::FileChunk { id, seq, data: chunk })
+            .await.map_err(|e| e.to_string())?;
+        seq += 1;
+    }
+
+    let checksum: [u8; 32] = hasher.finalize().into();
+    tx.send(crate::network::protocol::Message::FileEnd { id, checksum })
+        .await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Retorna lista de transferências em andamento
+#[tauri::command]
+async fn get_transfers(
+    state: State<'_, SharedState>,
+) -> Result<Vec<crate::transfer::TransferProgress>, String> {
+    let transfers = state.transfers.lock().await;
+    Ok(transfers.values().cloned().collect())
+}
+
 /// Conecta diretamente a um peer descoberto via mDNS
 #[tauri::command]
 async fn connect_to_peer(
@@ -284,6 +389,8 @@ pub fn run() {
             set_server_addr,
             discover_peers,
             connect_to_peer,
+            send_file_to_peer,
+            get_transfers,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

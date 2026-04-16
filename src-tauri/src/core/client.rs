@@ -136,6 +136,11 @@ async fn run_session<S>(
     let mut last_clipboard: Option<String> = None;
     let mut clipboard_check = tokio::time::interval(std::time::Duration::from_millis(500));
 
+    let mut file_receiver = match crate::transfer::FileReceiver::new().await {
+        Ok(r) => Some(r),
+        Err(e) => { warn!("FileReceiver indisponível: {}", e); None }
+    };
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -185,10 +190,33 @@ async fn run_session<S>(
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
-                        // Atualizar cache local para evitar re-envio
                         if let Message::ClipboardData { ref data, .. } = *msg {
                             last_clipboard = String::from_utf8(data.clone()).ok();
                         }
+                    }
+                    Ok(Message::FileStart { id, name, size }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            recv.on_file_start(id, name, size).await.unwrap_or_else(|e| warn!("FileStart: {}", e));
+                        }
+                    }
+                    Ok(Message::FileChunk { id, seq, data }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            recv.on_file_chunk(id, seq, data).await.unwrap_or_else(|e| warn!("FileChunk: {}", e));
+                        }
+                    }
+                    Ok(Message::FileEnd { id, checksum }) => {
+                        if let Some(ref mut recv) = file_receiver {
+                            match recv.on_file_end(id, checksum).await {
+                                Ok((name, path)) => info!("Arquivo recebido: '{}' → {:?}", name, path),
+                                Err(e) => {
+                                    warn!("FileEnd: {}", e);
+                                    let _ = send_message(stream, &Message::FileRetry { id }).await;
+                                }
+                            }
+                        }
+                    }
+                    Ok(Message::FileRetry { id }) => {
+                        warn!("Peer solicitou reenvio do arquivo id={}", id);
                     }
                     Ok(Message::Ping) => {
                         let _ = send_message(stream, &Message::Pong).await;
