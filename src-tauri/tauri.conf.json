@@ -28,7 +28,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDRjAwNzFFM0QxOTJBRTcKUldUbktoazlIZ2Z3N0lwOS9aYkJENElxVXlBOEpvOFpWOHlzWGRRYkpaVnJWSVZHeFo5c0hCTEMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE2MjdGNUUwM0I2N0NCNTYKUldSV3kyYzc0UFVuRm5SSStXSDhxNkk1b1A5eitnOEMxbWhCeWx4OUVPejBnWVZBVzNETmQ5T1EK",
       "endpoints": [
         "https://github.com/thamiresfm/Movex/releases/latest/download/latest.json"
       ]
