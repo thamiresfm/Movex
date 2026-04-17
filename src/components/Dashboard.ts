@@ -485,6 +485,24 @@ export async function renderDashboard(): Promise<void> {
     addLog('Conexão recusada ✕', 'warn');
   };
 
+  // ── navTo registrado IMEDIATAMENTE — antes de qualquer await ────────────────
+  // Garante que cliques na sidebar funcionam mesmo se os awaits abaixo demorarem
+  (window as any).navTo = (page: string, el: HTMLElement) => {
+    document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    const pageEl = document.getElementById(`page-${page}`);
+    if (pageEl) pageEl.classList.add('active');
+    el.classList.add('active');
+    const titles: Record<string, string> = {
+      painel: 'Painel Principal',
+      dispositivos: 'Dispositivos',
+      seguranca: 'Logs de Segurança · Interface de Diagnóstico',
+      configuracoes: 'Segurança & Conexão',
+    };
+    const titleEl = document.getElementById('pageTitle');
+    if (titleEl) titleEl.textContent = titles[page] ?? page;
+  };
+
   // Polling de aprovação movido para ConnectionStatus.startApprovalPolling — chamado abaixo
 
   // ── Cache de settings (raramente muda — evitar invoke por evento de status) ──
@@ -592,23 +610,7 @@ export async function renderDashboard(): Promise<void> {
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
 
-  // Handlers globais
-  (window as any).navTo = (page: string, el: HTMLElement) => {
-    document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    const pageEl = document.getElementById(`page-${page}`);
-    if (pageEl) pageEl.classList.add('active');
-    el.classList.add('active');
-    const titles: Record<string, string> = {
-      painel: 'Painel Principal',
-      dispositivos: 'Dispositivos',
-      seguranca: 'Logs de Segurança · Interface de Diagnóstico',
-      configuracoes: 'Segurança & Conexão',
-    };
-    const titleEl = document.getElementById('pageTitle');
-    if (titleEl) titleEl.textContent = titles[page] ?? page;
-  };
-
+  // navTo já registrado antes dos awaits — apenas registrar handlers restantes
   (window as any).clearLogs = clearLogs;
   (window as any).copyLogs = () => navigator.clipboard.writeText(document.getElementById('logBody')?.innerText ?? '');
   (window as any).toggleKey = () => {
