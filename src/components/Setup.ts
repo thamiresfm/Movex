@@ -40,7 +40,7 @@ export async function renderSetup(): Promise<void> {
 
         <div id="step-1">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:36px;">
-            <div class="mode-card selected" id="modeServer" onclick="selectMode('server')" style="background:var(--bg-3);border:1.5px solid var(--cyan);border-radius:14px;padding:28px 24px;cursor:pointer;transition:all .2s;background:linear-gradient(135deg,#0f1824,#0b0c10);box-shadow:0 0 24px rgba(0,212,255,.1);">
+            <div class="mode-card selected" id="modeServer" data-mode="server" style="background:var(--bg-3);border:1.5px solid var(--cyan);border-radius:14px;padding:28px 24px;cursor:pointer;transition:all .2s;background:linear-gradient(135deg,#0f1824,#0b0c10);box-shadow:0 0 24px rgba(0,212,255,.1);">
               <div style="width:40px;height:40px;background:var(--cyan-dim);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.5"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/></svg>
               </div>
@@ -48,7 +48,7 @@ export async function renderSetup(): Promise<void> {
               <div style="font-size:12px;color:var(--text-2);line-height:1.5;">Controle outras máquinas com este teclado/mouse. Ideal para sua estação de trabalho primária.</div>
             </div>
 
-            <div class="mode-card" id="modeClient" onclick="selectMode('client')" style="background:var(--bg-3);border:1.5px solid var(--border);border-radius:14px;padding:28px 24px;cursor:pointer;transition:all .2s;">
+            <div class="mode-card" id="modeClient" data-mode="client" style="background:var(--bg-3);border:1.5px solid var(--border);border-radius:14px;padding:28px 24px;cursor:pointer;transition:all .2s;">
               <div style="width:40px;height:40px;background:var(--bg-5);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" stroke-width="1.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
               </div>
@@ -59,20 +59,17 @@ export async function renderSetup(): Promise<void> {
 
           <!-- Campos de configuração -->
           <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px;">
-            <!-- Endereço do servidor (só cliente) -->
             <div id="server-addr-field" style="display:none;">
               <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Endereço do Servidor</label>
               <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
               <div style="font-size:10px;color:var(--text-3);margin-top:4px;">IP ou hostname do servidor na rede local</div>
             </div>
-            <!-- Nome da máquina — value preenchido via JS para evitar XSS -->
             <div>
               <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Nome desta máquina</label>
               <input id="hostnameInput" type="text"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'Inter',sans-serif;font-size:13px;color:var(--text);outline:none;" />
             </div>
-            <!-- Porta TCP + posição do peer -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
               <div>
                 <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Porta TCP</label>
@@ -92,12 +89,11 @@ export async function renderSetup(): Promise<void> {
             </div>
           </div>
 
-          <!-- Footer: ajuda + botões — sempre visível -->
           <div style="display:flex;align-items:center;justify-content:space-between;padding-top:4px;">
-            <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.3px;cursor:pointer;">ℹ Precisa de ajuda? Ver documentação</span>
+            <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.3px;">ℹ Precisa de ajuda? Ver documentação</span>
             <div style="display:flex;gap:12px;align-items:center;">
-              <button class="btn-ghost" onclick="">Voltar</button>
-              <button class="btn-primary" onclick="goToStep2()">Próximo Passo</button>
+              <button id="btnBack1" class="btn-ghost">Voltar</button>
+              <button id="btnNext" class="btn-primary">Próximo Passo</button>
             </div>
           </div>
         </div>
@@ -105,17 +101,16 @@ export async function renderSetup(): Promise<void> {
         <div id="step-2" style="display:none;">
           <div style="background:var(--bg-2);border:1px solid var(--border-c);border-radius:12px;padding:20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
             <code id="pskDisplay" style="font-family:monospace;font-size:18px;letter-spacing:3px;color:var(--cyan);word-break:break-all;">${formatPsk(settings.psk_hex)}</code>
-            <button class="btn btn-outline" id="btnCopy" onclick="copyPsk()">Copiar</button>
+            <button class="btn btn-outline" id="btnCopy">Copiar</button>
           </div>
           <p style="font-size:12px;color:var(--text-3);margin-bottom:28px;">💡 Use esta chave no outro computador ao instalar o Movex.</p>
           <div style="display:flex;gap:12px;justify-content:flex-end;">
-            <button class="btn-ghost" onclick="showStep(1)">← Voltar</button>
-            <button class="btn-primary" onclick="finishSetup()">Concluir Configuração ✓</button>
+            <button id="btnBack2" class="btn-ghost">← Voltar</button>
+            <button id="btnFinish" class="btn-primary">Concluir Configuração ✓</button>
           </div>
         </div>
       </div>
 
-      <!-- Status bar -->
       <div style="position:fixed;bottom:20px;right:20px;background:var(--bg-3);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:10px;">
         <div style="display:flex;justify-content:space-between;gap:24px;margin-bottom:4px;">
           <span style="color:var(--text-3);text-transform:uppercase;letter-spacing:.5px;">Status do Sistema</span>
@@ -131,18 +126,17 @@ export async function renderSetup(): Promise<void> {
     </div>
   `;
 
-  // Preencher hostname via .value (não via innerHTML) para evitar XSS
+  // Preencher hostname via .value para evitar XSS
   const hostnameInput = document.getElementById('hostnameInput') as HTMLInputElement;
   if (hostnameInput) hostnameInput.value = settings.hostname;
 
   let selectedMode = 'server';
 
-  (window as any).selectMode = (mode: string) => {
+  const selectMode = (mode: string) => {
     selectedMode = mode;
     const server = document.getElementById('modeServer')!;
     const client = document.getElementById('modeClient')!;
     const addrField = document.getElementById('server-addr-field')!;
-
     if (mode === 'server') {
       server.style.cssText += ';border-color:var(--cyan);background:linear-gradient(135deg,#0f1824,#0b0c10);box-shadow:0 0 24px rgba(0,212,255,.1);';
       client.style.cssText += ';border-color:var(--border);box-shadow:none;background:var(--bg-3);';
@@ -154,37 +148,45 @@ export async function renderSetup(): Promise<void> {
     }
   };
 
-  (window as any).goToStep2 = async () => {
+  const showStep = (n: number) => {
+    (document.getElementById('step-1') as HTMLElement).style.display = n === 1 ? 'block' : 'none';
+    (document.getElementById('step-2') as HTMLElement).style.display = n === 2 ? 'block' : 'none';
+  };
+
+  const goToStep2 = async () => {
     const hostname = (document.getElementById('hostnameInput') as HTMLInputElement).value.trim();
     const serverAddr = (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null;
     if (!hostname) { alert('Digite o nome desta máquina.'); return; }
-
     const port = parseInt((document.getElementById('portInput') as HTMLInputElement)?.value) || 24800;
     const peerPosition = (document.getElementById('peerPositionInput') as HTMLSelectElement)?.value || 'right';
     await invoke('save_settings', {
       hostname, role: selectedMode, serverAddr,
       port, pskHex: settings.psk_hex,
-      peerPosition, autostart: false, theme: 'dark'
+      peerPosition, autostart: false, theme: 'dark',
     }).catch(console.warn);
-
     showStep(2);
   };
 
-  (window as any).showStep = (n: number) => {
-    document.getElementById('step-1')!.style.display = n === 1 ? 'block' : 'none';
-    document.getElementById('step-2')!.style.display = n === 2 ? 'block' : 'none';
-  };
-
-  (window as any).copyPsk = () => {
-    const psk = settings.psk_hex;
-    navigator.clipboard.writeText(psk);
+  const copyPsk = () => {
+    navigator.clipboard.writeText(settings.psk_hex);
     const btn = document.getElementById('btnCopy')!;
     btn.textContent = '✓ Copiado!';
     setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
   };
 
-  (window as any).finishSetup = async () => {
+  const finishSetup = async () => {
     await invoke('complete_setup').catch(console.warn);
     window.location.reload();
   };
+
+  // ── Registrar eventos via addEventListener (CSP do Tauri bloqueia onclick inline) ──
+  document.querySelectorAll('[data-mode]').forEach(el => {
+    el.addEventListener('click', () => selectMode((el as HTMLElement).dataset.mode!));
+  });
+
+  document.getElementById('btnNext')?.addEventListener('click', goToStep2);
+  document.getElementById('btnBack1')?.addEventListener('click', () => {});
+  document.getElementById('btnBack2')?.addEventListener('click', () => showStep(1));
+  document.getElementById('btnCopy')?.addEventListener('click', copyPsk);
+  document.getElementById('btnFinish')?.addEventListener('click', finishSetup);
 }
