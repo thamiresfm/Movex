@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 /// Contadores de bytes transferidos na sessão atual
 #[derive(Debug, Default)]
@@ -12,6 +11,7 @@ pub struct SessionStats {
     pub files_received: AtomicU64,
 }
 
+#[allow(dead_code)]
 impl SessionStats {
     pub fn add_sent(&self, bytes: u64)     { self.bytes_sent.fetch_add(bytes, Ordering::Relaxed); }
     pub fn add_received(&self, bytes: u64) { self.bytes_received.fetch_add(bytes, Ordering::Relaxed); }
@@ -72,7 +72,7 @@ pub fn get_primary_screen_size() -> (u32, u32) {
     (1920, 1080)
 }
 
-/// Formata bytes em unidade legível
+#[allow(dead_code)]
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;

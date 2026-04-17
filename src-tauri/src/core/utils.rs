@@ -1,6 +1,6 @@
-/// Utilitários compartilhados entre módulos
+//! Utilitários compartilhados entre módulos
 
-/// CRC32 (IEEE 802.3 / polinômio 0xEDB88320) — usado para detecção de mudanças de clipboard
+/// CRC32 (IEEE 802.3 / polinômio 0xEDB88320) — usado para detecção de mudanças de clipboard.
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {

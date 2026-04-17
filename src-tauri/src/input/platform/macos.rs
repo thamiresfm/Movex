@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
@@ -148,7 +148,7 @@ impl InputCapture for MacOsCapture {
                             return;
                         }
                     };
-                    let run_loop = unsafe { core_foundation::runloop::CFRunLoop::get_current() };
+                    let run_loop = core_foundation::runloop::CFRunLoop::get_current();
                     run_loop.add_source(&loop_src, unsafe {
                         core_foundation::runloop::kCFRunLoopDefaultMode
                     });
@@ -265,7 +265,7 @@ fn get_screen_size() -> (f64, f64) {
 }
 
 fn get_cursor_position() -> Result<(f64, f64), ()> {
-    use core_graphics::event::{CGEvent, CGEventType};
+    use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     // Posição do cursor via evento dummy
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).map_err(|_| ())?;

@@ -6,6 +6,7 @@ use tracing::{debug, error};
 
 use crate::network::protocol::{Message, MAGIC};
 
+#[allow(dead_code)]
 pub const DEFAULT_PORT: u16 = 24800;
 
 /// Limite de segurança: pacotes > 100MB são rejeitados
@@ -78,6 +79,7 @@ pub fn load_or_generate_server_cert(
 }
 
 /// Gera certificado TLS autoassinado efêmero (uso em testes).
+#[allow(dead_code)]
 pub fn generate_self_signed_cert(
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), rcgen::Error> {
     let rcgen::CertifiedKey { cert, key_pair } =

@@ -14,6 +14,7 @@ impl Default for ReconnectPolicy {
     }
 }
 
+#[allow(dead_code)]
 impl ReconnectPolicy {
     /// Número da tentativa atual (começa em 0)
     pub fn attempt(&self) -> u32 {

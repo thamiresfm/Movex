@@ -38,7 +38,7 @@ pub fn read_clipboard_content() -> ClipboardContent {
     }
 }
 
-/// Lê apenas texto (compatibilidade com código existente)
+#[allow(dead_code)]
 pub fn read_clipboard() -> Option<String> {
     match arboard::Clipboard::new() {
         Ok(mut cb) => cb.get_text().ok().filter(|t| !t.is_empty()),

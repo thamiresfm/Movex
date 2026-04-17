@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
-use tauri::AppHandle;
 use crate::config::Settings;
 use crate::network::protocol::Message;
 use crate::transfer::TransferProgress;

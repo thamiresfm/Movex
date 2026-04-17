@@ -14,6 +14,7 @@ pub enum MouseButton {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct Modifiers(pub u32);
 
+#[allow(dead_code)]
 impl Modifiers {
     pub const NONE: Self = Self(0);
     pub const SHIFT: Self = Self(1 << 0);

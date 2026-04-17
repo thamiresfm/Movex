@@ -2,11 +2,9 @@ pub mod receiver;
 pub mod sender;
 
 pub use receiver::FileReceiver;
-pub use sender::send_file;
 
 use serde::{Deserialize, Serialize};
 
-/// Progresso de uma transferência de arquivo em andamento
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferProgress {
     pub id: u32,
@@ -16,6 +14,7 @@ pub struct TransferProgress {
     pub direction: TransferDirection,
 }
 
+#[allow(dead_code)]
 impl TransferProgress {
     pub fn percent(&self) -> u8 {
         if self.total_bytes == 0 { return 0; }

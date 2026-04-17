@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::network::protocol::{Message, FILE_CHUNK_SIZE};
 
-/// Envia um arquivo para o peer em chunks de 64KB com checksum SHA-256
+#[allow(dead_code)]
 pub async fn send_file<W>(
     stream: &mut W,
     path: &Path,
@@ -58,7 +58,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn send_file_produces_valid_sha256() {

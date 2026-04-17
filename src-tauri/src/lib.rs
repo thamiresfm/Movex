@@ -106,6 +106,7 @@ async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, 
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn save_settings(
     state: State<'_, SharedState>,
     hostname: String,
@@ -759,7 +760,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &sep, &lock, &disco, &sep, &quit])?;
 
             // Tray é opcional — não bloquear auto-start se o ícone estiver ausente
-            if let Some(icon) = app.default_window_icon().map(|i| i.clone()) {
+            if let Some(icon) = app.default_window_icon().cloned() {
                 let _tray = TrayIconBuilder::new()
                 .icon(icon)
                 .menu(&menu)

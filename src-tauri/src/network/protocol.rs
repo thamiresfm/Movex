@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn encode_decode_input_key_event() {
-        use crate::input::{InputEvent, Modifiers};
+        use crate::input::events::{InputEvent, Modifiers};
         let event = InputEvent::KeyEvent {
             keycode: 0x04, // 'a' em USB HID
             pressed: true,

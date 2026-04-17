@@ -1,5 +1,3 @@
-use tracing::info;
-
 pub fn enable() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     return enable_macos();
@@ -40,7 +38,7 @@ fn enable_macos() -> Result<(), String> {
     std::fs::create_dir_all(&agents_dir).map_err(|e| e.to_string())?;
     let path = agents_dir.join("com.movex.app.plist");
     std::fs::write(&path, plist).map_err(|e| e.to_string())?;
-    info!("Autostart ativado (macOS LaunchAgent): {:?}", path);
+    tracing::info!("Autostart ativado (macOS LaunchAgent): {:?}", path);
     Ok(())
 }
 
@@ -51,7 +49,7 @@ fn disable_macos() -> Result<(), String> {
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
-    info!("Autostart desativado (macOS)");
+    tracing::info!("Autostart desativado (macOS)");
     Ok(())
 }
 
@@ -75,7 +73,7 @@ fn enable_windows() -> Result<(), String> {
         .set_value("Movex", &exe_str)
         .map_err(|e| format!("Falha ao definir valor de autostart: {}", e))?;
 
-    info!("Autostart ativado (Windows Registry via winreg): {}", exe_str);
+    tracing::info!("Autostart ativado (Windows Registry via winreg): {}", exe_str);
     Ok(())
 }
 
@@ -94,6 +92,6 @@ fn disable_windows() -> Result<(), String> {
 
     // `delete_value` não retorna erro se o valor não existir
     run_key.delete_value("Movex").unwrap_or_default();
-    info!("Autostart desativado (Windows Registry)");
+    tracing::info!("Autostart desativado (Windows Registry)");
     Ok(())
 }

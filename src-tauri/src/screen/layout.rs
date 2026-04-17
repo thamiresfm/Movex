@@ -31,6 +31,7 @@ pub struct MultiMonitorLayout {
     pub monitors: Vec<Monitor>,
 }
 
+#[allow(dead_code)]
 impl MultiMonitorLayout {
     /// Retorna o monitor que contém o ponto (x, y) em pixels absolutos
     pub fn monitor_at(&self, x: i32, y: i32) -> Option<&Monitor> {
@@ -89,7 +90,7 @@ fn detect_monitors_macos() -> MultiMonitorLayout {
     let displays = CGDisplay::active_displays().unwrap_or_default();
     let main_id = CGDisplay::main().id;
 
-    let mut monitors: Vec<Monitor> = displays.iter().enumerate().map(|(i, &id)| {
+    let mut monitors: Vec<Monitor> = displays.iter().enumerate().map(|(_i, &id)| {
         let display = CGDisplay::new(id);
         let bounds = display.bounds();
         let scale = if bounds.size.width > 0.0 {
@@ -165,19 +166,14 @@ fn detect_monitors_windows() -> MultiMonitorLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PeerPosition { Left, #[default] Right, Above, Below }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScreenLayout {
     pub local: ScreenResolution,
     pub peer: Option<ScreenResolution>,
     pub peer_position: PeerPosition,
 }
 
-impl Default for ScreenLayout {
-    fn default() -> Self {
-        Self { local: ScreenResolution::default(), peer: None, peer_position: PeerPosition::default() }
-    }
-}
-
+#[allow(dead_code)]
 impl ScreenLayout {
     pub fn to_local_pixels(&self, x_norm: f32, y_norm: f32) -> (f32, f32) {
         (x_norm * self.local.width as f32, y_norm * self.local.height as f32)

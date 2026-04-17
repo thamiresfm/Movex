@@ -8,7 +8,7 @@ use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
-use crate::network::transport::{create_tls_connector, recv_message, send_message, TofuVerifier};
+use crate::network::transport::{create_tls_connector, recv_message, send_message};
 
 /// Conecta a um endereço específico (descoberto via mDNS) sem alterar settings persistidas.
 /// Não tenta reconectar — apenas uma tentativa.
@@ -211,26 +211,23 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             (s.hostname.clone(), s.psk_hex.clone())
                         };
 
-                        match do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
-                            Ok(peer_hostname) => {
-                                info!("Conectado ao servidor: {}", peer_hostname);
-                                policy.reset();
-                                {
-                                    let mut status = state.connection_status.lock().await;
-                                    *status = ConnectionStatus::Connected {
-                                        peer_hostname: peer_hostname.clone(),
-                                        latency_ms: 0,
-                                    };
-                                    let mut started = state.session_started_at.lock().await;
-                                    *started = Some(std::time::Instant::now());
-                                }
-
-                                let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
-                                { *state.message_tx.lock().await = Some(msg_tx); }
-                                run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
-                                { *state.message_tx.lock().await = None; }
+                        if let Ok(peer_hostname) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+                            info!("Conectado ao servidor: {}", peer_hostname);
+                            policy.reset();
+                            {
+                                let mut status = state.connection_status.lock().await;
+                                *status = ConnectionStatus::Connected {
+                                    peer_hostname: peer_hostname.clone(),
+                                    latency_ms: 0,
+                                };
+                                let mut started = state.session_started_at.lock().await;
+                                *started = Some(std::time::Instant::now());
                             }
-                            Err(()) => {}
+
+                            let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
+                            { *state.message_tx.lock().await = Some(msg_tx); }
+                            run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
+                            { *state.message_tx.lock().await = None; }
                         }
                     }
                     Err(e) => warn!("Falha no TLS handshake: {}", e),
@@ -314,7 +311,7 @@ async fn run_session<S>(
                         }
                         _ => continue,
                     };
-                    if last_clipboard.as_ref().map_or(true, |prev| prev != &key) {
+                    if last_clipboard.as_ref() != Some(&key) {
                         last_clipboard = Some(key);
                         if send_message(stream, &msg).await.is_err() { break; }
                     }
