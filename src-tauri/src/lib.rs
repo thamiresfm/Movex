@@ -380,8 +380,8 @@ async fn connect_to_peer(
         s.role = Role::Client;
         s.save()?;
     }
-    // Reusar start_connection (já cancela anterior)
-    drop(state.cancel_connection().await);
+    // Cancelar conexão anterior antes de reconectar
+    state.cancel_connection().await;
     let cancel = state.new_cancel_token().await;
     let state_clone = state.inner().clone();
     tokio::spawn(async move {
@@ -736,6 +736,33 @@ pub fn run() {
                     },
                 ) {
                     tracing::warn!("Falha ao registrar atalho global: {}", e);
+                }
+            }
+
+            // ── Auto-start da conexão ao abrir o app ─────────────────────────
+            // Se o setup já foi concluído, iniciar servidor ou cliente automaticamente
+            {
+                let setup_done = tauri::async_runtime::block_on(async {
+                    shared_state.settings.lock().await.setup_complete
+                });
+                if setup_done {
+                    let state_auto = shared_state.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let role = state_auto.settings.lock().await.role.clone();
+                        let cancel = state_auto.new_cancel_token().await;
+                        match role {
+                            crate::config::Role::Server => {
+                                tracing::info!("Auto-start: iniciando como Servidor...");
+                                if let Err(e) = core::server::start(state_auto, cancel).await {
+                                    tracing::error!("Auto-start servidor: {}", e);
+                                }
+                            }
+                            crate::config::Role::Client => {
+                                tracing::info!("Auto-start: iniciando como Cliente...");
+                                core::client::connect(state_auto, cancel).await;
+                            }
+                        }
+                    });
                 }
             }
 
