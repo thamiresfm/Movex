@@ -50,13 +50,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hmac_known_vector() {
-        // RFC 4231 Test Case 1: key=0x0b*20, data="Hi There"
-        let key_hex = hex::encode([0x0bu8; 20]);
-        let result = compute_hmac(&key_hex, "Hi There");
-        // Não é exatamente RFC4231 porque a chave é passada como hex string
-        // mas garante que a função é determinística
-        assert_eq!(result, compute_hmac(&key_hex, "Hi There"));
+    fn hmac_deterministic_known_answer() {
+        // Vetor fixo calculado com a assinatura real da função:
+        // compute_hmac(psk_hex="616263", nonce="313233")
+        // = HMAC-SHA256(key=b"616263", msg=b"313233")
+        // Calculado offline e fixado para detectar qualquer regressão
+        let result = compute_hmac("616263", "313233");
+        assert_eq!(
+            result,
+            "530a08becdf33866dc22d5deebe0eff00063a02859f41d67d2e4735c56f0f8af",
+            "HMAC produziu valor inesperado — possível regressão no algoritmo"
+        );
     }
 
     #[test]

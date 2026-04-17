@@ -254,10 +254,9 @@ async fn handle_client<S>(
         peer_position,
     };
 
-    // Emitir informações de monitores ao cliente para coordenadas corretas
-    let _ = msg_tx.try_send(Message::Input(
-        crate::input::InputEvent::MouseMove { x: -1.0, y: -1.0 } // sinal de sync (ignorado)
-    ));
+    // Resolução do servidor enviada ao cliente via SyncInfo (quando implementado)
+    // Por ora apenas loga as dimensões detectadas
+    tracing::info!("Monitor local: {}x{} scale={:.1}", screen_w, screen_h, scale);
 
     let state_for_capture = state.clone();
     let msg_tx_for_capture = msg_tx.clone();
@@ -373,6 +372,13 @@ async fn handle_client<S>(
                     Ok(Message::Disconnect { reason }) => {
                         info!("Cliente desconectou: {}", reason);
                         break;
+                    }
+                    // Responder Pong ao Ping enviado pelo cliente (para ele medir latência)
+                    Ok(Message::Ping) => {
+                        let _ = send_message(&mut stream, &Message::Pong).await;
+                    }
+                    Ok(Message::Pong) => {
+                        // Pong em resposta ao Ping do servidor já tratado acima
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);

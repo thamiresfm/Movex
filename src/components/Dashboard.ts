@@ -616,7 +616,7 @@ export async function renderDashboard(): Promise<void> {
             <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
               <span style="font-size:18px;">${t.direction === 'Sending' ? '📤' : '📥'}</span>
               <div style="flex:1;">
-                <div style="font-size:13px;font-weight:600;color:var(--text);">${t.name}</div>
+                <div style="font-size:13px;font-weight:600;color:var(--text);">${esc(t.name)}</div>
                 <div style="background:var(--bg-5);border-radius:3px;height:4px;margin-top:4px;">
                   <div style="background:var(--cyan);height:4px;border-radius:3px;width:${t.percent ?? 0}%;transition:width .3s;"></div>
                 </div>
@@ -844,15 +844,19 @@ export async function renderDashboard(): Promise<void> {
 
   // ── Posicionamento do peer no mapa de telas ────────────────────────────────
   (window as any).setPeerPosition = async (position: string) => {
+    if (!cachedSettings) {
+      addLog('Configurações ainda carregando — tente novamente em instantes.', 'warn');
+      return;
+    }
     await invoke('save_settings', {
-      hostname: cachedSettings?.hostname ?? '',
-      role: cachedSettings?.role ?? 'server',
-      serverAddr: cachedSettings?.server_addr ?? null,
-      port: cachedSettings?.port ?? 24800,
-      pskHex: cachedSettings?.psk_hex ?? '',
+      hostname: cachedSettings.hostname,
+      role: cachedSettings.role,
+      serverAddr: cachedSettings.server_addr ?? null,
+      port: cachedSettings.port,
+      pskHex: cachedSettings.psk_hex, // nunca vazio — PSK preservada
       peerPosition: position,
-      autostart: cachedSettings?.autostart ?? false,
-      theme: cachedSettings?.theme ?? 'dark',
+      autostart: cachedSettings.autostart ?? false,
+      theme: cachedSettings.theme ?? 'dark',
     }).catch(console.warn);
     await refreshSettings();
     addLog(`Posição do monitor remoto: ${position}`, 'info');

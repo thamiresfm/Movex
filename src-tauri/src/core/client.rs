@@ -217,7 +217,14 @@ async fn run_session<S>(
 
             // Verificar clipboard periodicamente — texto E imagens (se habilitado)
             _ = clipboard_check.tick() => {
-                let sync_enabled = state.settings.lock().await.clipboard_sync_enabled;
+                // Ler flag sem lock pesado (settings é verificado fora do hot-path)
+                let sync_enabled = {
+                    if let Ok(s) = state.settings.try_lock() {
+                        s.clipboard_sync_enabled
+                    } else {
+                        true // padrão seguro se lock ocupado
+                    }
+                };
                 if !sync_enabled { continue; }
                 if let Some(msg) = crate::clipboard::sync::create_clipboard_message() {
                     // Hash CRC32 do conteúdo para detectar mudanças reais (não só tamanho)
