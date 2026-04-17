@@ -222,7 +222,7 @@ async fn run_session<S>(
                     if let Ok(s) = state.settings.try_lock() {
                         s.clipboard_sync_enabled
                     } else {
-                        true // padrão seguro se lock ocupado
+                        false // respeitar preferência do usuário na dúvida — não enviar
                     }
                 };
                 if !sync_enabled { continue; }
@@ -326,5 +326,4 @@ async fn run_session<S>(
     *started = None;
 }
 
-// CRC32 movido para crate::core::utils::crc32
 

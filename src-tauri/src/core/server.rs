@@ -377,9 +377,7 @@ async fn handle_client<S>(
                     Ok(Message::Ping) => {
                         let _ = send_message(&mut stream, &Message::Pong).await;
                     }
-                    Ok(Message::Pong) => {
-                        // Pong em resposta ao Ping do servidor já tratado acima
-                    }
+                    // Message::Pong já tratado no arm acima (linha ~357) — não duplicar
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
                     }

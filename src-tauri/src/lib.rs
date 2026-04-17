@@ -249,11 +249,19 @@ async fn send_file_to_peer(
         .ok_or_else(|| "Não há conexão ativa".to_string())?;
 
     let transfer_id = state.next_transfer_id().await;
-    let path = Path::new(&path).to_path_buf();
+
+    // Canonicalizar path para evitar path traversal (consistente com drop_file_to_peer)
+    let path = match tokio::fs::canonicalize(Path::new(&path)).await {
+        Ok(p) => p,
+        Err(e) => return Err(format!("Path inválido: {}", e)),
+    };
+    if path.is_dir() {
+        return Err("Não é possível enviar diretórios".to_string());
+    }
+
     let state_clone = state.inner().clone();
 
     tokio::spawn(async move {
-        // Abrir arquivo e enviar via canal de mensagens
         let file_name = path.file_name()
             .unwrap_or_default()
             .to_string_lossy()
