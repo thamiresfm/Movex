@@ -21,7 +21,6 @@ fn set_hook_cb(cb: Option<Arc<HookCallback>>) {
     }
 }
 
-/// Chamado centenas de vezes por segundo — usa read lock (não-exclusivo)
 fn call_hook_cb(event: InputEvent) {
     if let Ok(r) = get_hook_cell().read() {
         if let Some(cb) = r.as_ref() {
@@ -29,8 +28,6 @@ fn call_hook_cb(event: InputEvent) {
         }
     }
 }
-
-// ── Captura via SetWindowsHookEx ─────────────────────────────────────────────
 
 pub struct WindowsCapture {
     running: Arc<AtomicBool>,
@@ -49,17 +46,12 @@ impl InputCapture for WindowsCapture {
         }
 
         let running = Arc::clone(&self.running);
-
-        // Registrar callback no static global antes de spawnar a thread
         set_hook_cb(Some(Arc::new(callback)));
 
         std::thread::spawn(move || {
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowsHookExW, UnhookWindowsHookEx,
                 WH_MOUSE_LL, WH_KEYBOARD_LL, MSG,
-                WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL,
-                WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
                 HC_ACTION,
             };
             use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
@@ -84,23 +76,23 @@ impl InputCapture for WindowsCapture {
                     let screen = get_screen_size_win();
 
                     let event = match w_param.0 as u32 {
-                        v if v == WM_MOUSEMOVE.0 => Some(InputEvent::MouseMove {
+                        v if v == WM_MOUSEMOVE => Some(InputEvent::MouseMove {
                             x: data.pt.x as f32 / screen.0,
                             y: data.pt.y as f32 / screen.1,
                         }),
-                        v if v == WM_LBUTTONDOWN.0 => Some(InputEvent::MouseButton {
+                        v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {
                             button: MouseButton::Left, pressed: true,
                         }),
-                        v if v == WM_LBUTTONUP.0 => Some(InputEvent::MouseButton {
+                        v if v == WM_LBUTTONUP => Some(InputEvent::MouseButton {
                             button: MouseButton::Left, pressed: false,
                         }),
-                        v if v == WM_RBUTTONDOWN.0 => Some(InputEvent::MouseButton {
+                        v if v == WM_RBUTTONDOWN => Some(InputEvent::MouseButton {
                             button: MouseButton::Right, pressed: true,
                         }),
-                        v if v == WM_RBUTTONUP.0 => Some(InputEvent::MouseButton {
+                        v if v == WM_RBUTTONUP => Some(InputEvent::MouseButton {
                             button: MouseButton::Right, pressed: false,
                         }),
-                        v if v == WM_MOUSEWHEEL.0 => {
+                        v if v == WM_MOUSEWHEEL => {
                             let delta = ((data.mouseData >> 16) as i16) as f32 / 120.0;
                             Some(InputEvent::MouseScroll { dx: 0.0, dy: delta })
                         }
@@ -127,7 +119,7 @@ impl InputCapture for WindowsCapture {
                 if n_code == HC_ACTION as i32 {
                     let data = &*(l_param.0 as *const KBDLLHOOKSTRUCT);
                     let vk = w_param.0 as u32;
-                    let pressed = vk == WM_KEYDOWN.0 || vk == WM_SYSKEYDOWN.0;
+                    let pressed = vk == WM_KEYDOWN || vk == WM_SYSKEYDOWN;
 
                     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
                     let mut mods = Modifiers::NONE;
@@ -151,7 +143,7 @@ impl InputCapture for WindowsCapture {
                 let mouse_hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0) {
                     Ok(h) => h,
                     Err(e) => {
-                        error!("WindowsCapture: falha ao instalar hook de mouse: {} — verifique permissões", e);
+                        error!("WindowsCapture: falha ao instalar hook de mouse: {}", e);
                         running.store(false, Ordering::SeqCst);
                         return;
                     }
@@ -166,11 +158,10 @@ impl InputCapture for WindowsCapture {
                     }
                 };
 
-                info!("WindowsCapture: hooks instalados (mouse + teclado)");
+                info!("WindowsCapture: hooks instalados");
 
                 let mut msg = MSG::default();
                 while running.load(Ordering::SeqCst) {
-                    // GetMessage com timeout via PeekMessage para checar `running`
                     use windows::Win32::UI::WindowsAndMessaging::{
                         PeekMessageW, TranslateMessage, DispatchMessageW, PM_REMOVE,
                     };
@@ -193,11 +184,10 @@ impl InputCapture for WindowsCapture {
 
     fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
-        set_hook_cb(None); // limpar callback global
+        set_hook_cb(None);
     }
 
     fn lock_cursor(&self) {
-        // Bloquear cursor usando ClipCursor com rect de 1x1 pixel
         if let Ok((x, y)) = get_cursor_pos_win() {
             unsafe {
                 use windows::Win32::Foundation::RECT;
@@ -218,8 +208,6 @@ impl InputCapture for WindowsCapture {
     }
 }
 
-// ── Injeção via SendInput ────────────────────────────────────────────────────
-
 pub struct WindowsInjector;
 
 impl WindowsInjector {
@@ -229,20 +217,16 @@ impl WindowsInjector {
 impl InputInjector for WindowsInjector {
     fn inject(&self, event: InputEvent) -> Result<(), String> {
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, KEYBDINPUT, MOUSEINPUT,
-            INPUT_MOUSE, INPUT_KEYBOARD,
-            KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY,
+            SendInput, INPUT, INPUT_0, MOUSEINPUT,
+            INPUT_MOUSE,
             MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
             MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
             MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
             MOUSEEVENTF_WHEEL,
         };
 
-        let (sw, sh) = get_screen_size_win();
-
         let inputs: Vec<INPUT> = match event {
             InputEvent::MouseMove { x, y } => {
-                // Coordenadas absolutas: 0-65535
                 let ax = (x * 65535.0) as i32;
                 let ay = (y * 65535.0) as i32;
                 vec![INPUT {
@@ -298,12 +282,11 @@ impl InputInjector for WindowsInjector {
             InputEvent::KeyEvent { keycode, pressed, modifiers } => {
                 let mut inputs = vec![];
 
-                // Modificadores primeiro (se press) ou depois (se release)
                 let mod_keys = [
                     (Modifiers::SHIFT, 0x10u16),
                     (Modifiers::CTRL,  0x11u16),
                     (Modifiers::ALT,   0x12u16),
-                    (Modifiers::META,  0x5Bu16), // VK_LWIN
+                    (Modifiers::META,  0x5Bu16),
                 ];
 
                 if pressed {
@@ -342,8 +325,7 @@ impl InputInjector for WindowsInjector {
 
 fn make_key_input(vk: u16, key_up: bool) -> windows::Win32::UI::Input::KeyboardAndMouse::INPUT {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, KEYBDINPUT, INPUT_KEYBOARD,
-        KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY,
+        INPUT, INPUT_0, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP,
     };
     let flags = if key_up { KEYEVENTF_KEYUP } else { Default::default() };
     INPUT {
