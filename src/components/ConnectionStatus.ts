@@ -22,6 +22,11 @@ export function onStatusChange(handler: StatusHandler): void {
   handlers.push(handler);
 }
 
+/** Remove todos os handlers — chamar antes de re-renderizar o Dashboard */
+export function cleanupStatusHandlers(): void {
+  handlers.length = 0;
+}
+
 /**
  * Inicializa escuta de eventos de status.
  * Usa evento Tauri quando disponível; cai para polling como fallback.

@@ -758,8 +758,13 @@ pub fn run() {
                                 }
                             }
                             crate::config::Role::Client => {
-                                tracing::info!("Auto-start: iniciando como Cliente...");
-                                core::client::connect(state_auto, cancel).await;
+                                let has_addr = state_auto.settings.lock().await.server_addr.is_some();
+                                if has_addr {
+                                    tracing::info!("Auto-start: iniciando como Cliente...");
+                                    core::client::connect(state_auto, cancel).await;
+                                } else {
+                                    tracing::warn!("Auto-start: modo Cliente sem server_addr — aguardando configuração do usuário");
+                                }
                             }
                         }
                     });

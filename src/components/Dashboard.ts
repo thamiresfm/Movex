@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { addLog, clearLogs } from "./Logs";
 import { initScreenBorder } from "./ScreenBorder";
 import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
-import { initStatusListener, onStatusChange, startApprovalPolling } from "./ConnectionStatus";
+import { initStatusListener, onStatusChange, startApprovalPolling, cleanupStatusHandlers } from "./ConnectionStatus";
 import { cleanupAllListeners } from "../utils/tauri-events";
 
 interface StatusPayload {
@@ -527,6 +527,7 @@ export async function renderDashboard(): Promise<void> {
     stopApprovalPolling();
     cleanupFileTransfer();
     cleanupAllListeners();
+    cleanupStatusHandlers(); // evita acúmulo de handlers em re-renders
   };
 
   // Delegar status updates para o módulo ConnectionStatus
@@ -600,12 +601,7 @@ export async function renderDashboard(): Promise<void> {
     } catch { /* fora do Tauri */ }
   });
 
-  // Atualizar cache de settings após salvar configurações
-  const origSaveConfig = (window as any).saveConfig;
-  (window as any).saveConfig = async (...args: any[]) => {
-    await origSaveConfig?.(...args);
-    await refreshSettings(); // invalidar cache após salvar
-  };
+  // wrapper de cache será instalado após saveConfig ser definido
 
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
@@ -667,8 +663,9 @@ export async function renderDashboard(): Promise<void> {
   (window as any).selectRoleCard = async (role: string) => {
     currentRole = role;
     applyRoleUI(role);
-    await invoke('set_role', { role }).catch(console.warn);
-    addLog(`Papel alterado para: ${role === 'server' ? 'Servidor' : 'Cliente'}`, 'sec');
+    // switch_role cancela conexão ativa, salva e relança automaticamente
+    await invoke('switch_role', { role }).catch(console.warn);
+    addLog(`Papel alterado para: ${role === 'server' ? 'Servidor' : 'Cliente'} (reconectando...)`, 'sec');
   };
 
   (window as any).applyServerAddr = async () => {
@@ -702,6 +699,8 @@ export async function renderDashboard(): Promise<void> {
 
   (window as any).saveConfig = async () => {
     const port = parseInt((document.getElementById('portInput') as HTMLInputElement).value) || 24800;
+    // Ler chave do campo da UI (usuário pode ter alterado)
+    const keyVal = (document.getElementById('keyInput') as HTMLInputElement)?.value.trim();
     try {
       const s = await invoke<any>('get_settings');
       await invoke('save_settings', {
@@ -709,9 +708,9 @@ export async function renderDashboard(): Promise<void> {
         role: currentRole,
         serverAddr: (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null,
         port,
-        pskHex: s.psk_hex,
+        pskHex: keyVal || s.psk_hex, // usar valor digitado se não estiver vazio
         peerPosition: s.peer_position ?? 'right',
-        autostart: s.autostart ?? false,
+        autostart: (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? s.autostart ?? false,
         theme: s.theme ?? 'dark',
       });
       addLog("Configurações salvas com sucesso.", "sec");
@@ -719,6 +718,14 @@ export async function renderDashboard(): Promise<void> {
       addLog(`Erro ao salvar: ${e}`, 'warn');
     }
   };
+  // Invalidar cache APÓS definição real do saveConfig
+  {
+    const realSave = (window as any).saveConfig;
+    (window as any).saveConfig = async (...args: any[]) => {
+      await realSave?.(...args);
+      await refreshSettings();
+    };
+  }
 
   // Carregar configurações atuais ao abrir a página
   await loadCurrentSettings();
@@ -1014,22 +1021,36 @@ export async function renderDashboard(): Promise<void> {
 function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
   const map = document.getElementById('screenMap');
   if (!map) return;
-  const peer = status.peer_hostname ?? 'Aguardando...';
   const isActive = status.active_screen === 'Local';
 
-  map.innerHTML = `
-    <div draggable="true" style="background:${isActive?'linear-gradient(160deg,#0f1824,#0d1520)':'var(--bg-4)'};border:1.5px solid ${isActive?'var(--cyan)':'var(--border)'};border-radius:12px;padding:18px 20px 14px;width:148px;text-align:center;cursor:grab;${isActive?'box-shadow:0 0 20px rgba(0,212,255,.12);':''}">
-      <div style="font-size:28px;margin-bottom:8px;">🖥️</div>
-      <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:.5px;text-transform:uppercase;">${settings.hostname}</div>
-      <div style="font-size:10px;color:${isActive?'var(--cyan)':'var(--text-3)'};margin-top:3px;">${isActive?'● ATIVO':'em espera'}</div>
-    </div>
-    <div style="color:var(--text-3);font-size:20px;">⇄</div>
-    <div style="background:${!isActive&&status.connected?'linear-gradient(160deg,#0f1824,#0d1520)':'var(--bg-4)'};border:1.5px solid ${!isActive&&status.connected?'var(--cyan)':'var(--border)'};border-radius:12px;padding:18px 20px 14px;width:148px;text-align:center;cursor:grab;">
-      <div style="font-size:28px;margin-bottom:8px;">🖥️</div>
-      <div style="font-size:11px;font-weight:700;color:var(--text);letter-spacing:.5px;text-transform:uppercase;">${peer}</div>
-      <div style="font-size:10px;color:${status.connected?'var(--cyan)':'var(--text-3)'};margin-top:3px;">${status.connected?'● CONECTADO':'desconectado'}</div>
-    </div>
-  `;
+  // Usar createElement + textContent para evitar XSS (hostname/peer_hostname vêm da rede)
+  map.innerHTML = '';
+
+  const makeCard = (isLocal: boolean, hostname: string, active: boolean, connected: boolean) => {
+    const card = document.createElement('div');
+    card.draggable = true;
+    card.style.cssText = `background:${active?'linear-gradient(160deg,#0f1824,#0d1520)':'var(--bg-4)'};border:1.5px solid ${active?'var(--cyan)':'var(--border)'};border-radius:12px;padding:18px 20px 14px;width:148px;text-align:center;cursor:grab;${active?'box-shadow:0 0 20px rgba(0,212,255,.12);':''}`;
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size:28px;margin-bottom:8px;';
+    icon.textContent = '🖥️';
+    const name = document.createElement('div');
+    name.style.cssText = 'font-size:11px;font-weight:700;color:var(--text);letter-spacing:.5px;text-transform:uppercase;';
+    name.textContent = hostname; // textContent — sem XSS
+    const statusEl = document.createElement('div');
+    statusEl.style.cssText = `font-size:10px;color:${active?'var(--cyan)':'var(--text-3)'};margin-top:3px;`;
+    statusEl.textContent = isLocal ? (active ? '● ATIVO' : 'em espera') : (connected ? '● CONECTADO' : 'desconectado');
+    card.appendChild(icon);
+    card.appendChild(name);
+    card.appendChild(statusEl);
+    return card;
+  };
+
+  map.appendChild(makeCard(true,  settings.hostname,                        isActive,  false));
+  const arrow = document.createElement('div');
+  arrow.style.cssText = 'color:var(--text-3);font-size:20px;';
+  arrow.textContent = '⇄';
+  map.appendChild(arrow);
+  map.appendChild(makeCard(false, status.peer_hostname ?? 'Aguardando...', !isActive && status.connected, status.connected));
 }
 
 function updateDevices(status: StatusPayload, settings: SettingsPayload) {
@@ -1123,10 +1144,7 @@ function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;
 
 function simulateCmd(cmd: string): string {
   if (cmd === 'clear') { clearLogs(); return ''; }
-  if (cmd === 'help') return 'Comandos: clear, status';
-  if (cmd === 'status') {
-    const el = document.getElementById('pageTitle');
-    return `Movex v0.1.0 · ${el?.textContent ?? ''}`;
-  }
-  return `Comando '${cmd}': não reconhecido. Digite 'help' para ajuda.`;
+  if (cmd === 'help') return 'Comandos disponíveis: clear, status';
+  if (cmd === 'status') return (document.getElementById('pageTitle')?.textContent ?? '') + ' · rodando';
+  return `Comando '${cmd}' não reconhecido. Digite 'help'.`;
 }
