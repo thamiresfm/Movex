@@ -66,6 +66,7 @@ pub struct Settings {
     pub setup_complete: bool,
     pub notifications_enabled: bool,
     pub lock_key: String,            // atalho para modo lock, ex: "ctrl+alt+l"
+    pub clipboard_sync_enabled: bool, // sincronizar clipboard entre máquinas
     pub recent_peers: Vec<RecentPeer>, // histórico (max 10)
     pub lock_mode: bool,             // modo lock ativo (não persistir como true)
 }
@@ -73,7 +74,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             hostname: get_hostname(),
             role: Role::default(),
             server_addr: None,
@@ -85,6 +86,7 @@ impl Default for Settings {
             setup_complete: false,
             notifications_enabled: true,
             lock_key: "ctrl+alt+l".to_string(),
+            clipboard_sync_enabled: true,
             recent_peers: vec![],
             lock_mode: false,
         }
@@ -124,6 +126,11 @@ impl Settings {
                             s.lock_key = "ctrl+alt+l".to_string();
                             s.recent_peers = vec![];
                             s.lock_mode = false;
+                        }
+                        // Migrar schema v2 → v3
+                        if s.schema_version < 3 {
+                            s.schema_version = 3;
+                            s.clipboard_sync_enabled = true;
                             let _ = s.save();
                         }
                         // Nunca persistir lock_mode = true ao carregar
@@ -200,7 +207,7 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.port, original.port);
         assert_eq!(restored.psk_hex, original.psk_hex);
-        assert_eq!(restored.schema_version, 2);
+        assert_eq!(restored.schema_version, 3);
     }
 
     #[test]

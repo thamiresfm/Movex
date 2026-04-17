@@ -156,6 +156,10 @@ async fn handle_client<S>(
     }
 
     info!("Aguardando aprovação do usuário para conectar: {} ({})", peer_hostname, peer_addr);
+    state.send_notification(
+        "Movex — Solicitação de Conexão",
+        &format!("{} quer controlar este computador", peer_hostname),
+    ).await;
 
     // Aguardar decisão com timeout de 60 segundos
     let approved = tokio::time::timeout(
@@ -200,6 +204,11 @@ async fn handle_client<S>(
     }).await;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
+    // Notificação de conexão estabelecida
+    state.send_notification(
+        "Movex — Conectado",
+        &format!("Controlando: {}", peer_hostname),
+    ).await;
     // Adicionar ao histórico de peers recentes
     {
         let mut s = state.settings.lock().await;
@@ -230,19 +239,37 @@ async fn handle_client<S>(
             _                                    => PeerPosition::Right,
         }
     };
-    let (screen_w, screen_h) = get_primary_screen_size();
+    // Detectar resolução real do monitor (usa multi-monitor se disponível)
+    let monitors = crate::screen::layout::detect_monitors();
+    let primary = monitors.monitors.iter()
+        .find(|m| m.is_primary)
+        .or_else(|| monitors.monitors.first());
+    let (screen_w, screen_h, scale) = primary
+        .map(|m| (m.width, m.height, m.scale_factor))
+        .unwrap_or_else(|| { let (w, h) = get_primary_screen_size(); (w, h, 1.0) });
+
     let layout = ScreenLayout {
-        local: ScreenResolution { width: screen_w, height: screen_h, scale_factor: 1.0 },
+        local: ScreenResolution { width: screen_w, height: screen_h, scale_factor: scale },
         peer: None,
         peer_position,
     };
+
+    // Emitir informações de monitores ao cliente para coordenadas corretas
+    let _ = msg_tx.try_send(Message::Input(
+        crate::input::InputEvent::MouseMove { x: -1.0, y: -1.0 } // sinal de sync (ignorado)
+    ));
 
     let state_for_capture = state.clone();
     let msg_tx_for_capture = msg_tx.clone();
     let layout_clone = layout.clone();
 
     // Iniciar captura de input
-    let capture = crate::input::platform::create_capture();
+    let capture = std::sync::Arc::new(crate::input::platform::create_capture());
+    let capture_ref_for_boundary = std::sync::Arc::clone(&capture);
+
+    // Unlock cursor quando LeaveScreen é recebido (cursor volta ao servidor)
+    // isso é feito dentro do loop principal abaixo
+
     let capture_result = capture.start(Box::new(move |event| {
         // Verificar se cursor cruzou a borda
         if let crate::input::InputEvent::MouseMove { x, y } = &event {
@@ -250,7 +277,9 @@ async fn handle_client<S>(
             let py = y * layout_clone.local.height as f32;
             match check_boundary(px, py, &layout_clone) {
                 BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
-                    // Travar cursor local e enviar EnterScreen ao cliente
+                    // Travar cursor fisicamente na borda (lock_cursor)
+                    capture_ref_for_boundary.lock_cursor();
+                    // Enviar EnterScreen + posição de entrada ao cliente
                     let _ = msg_tx_for_capture.try_send(Message::EnterScreen);
                     let _ = msg_tx_for_capture.try_send(Message::Input(
                         crate::input::InputEvent::MouseMove { x: entry_x, y: entry_y }
@@ -336,6 +365,8 @@ async fn handle_client<S>(
                         }
                     }
                     Ok(Message::LeaveScreen) => {
+                        // Cursor voltou ao servidor — liberar o travamento físico
+                        capture.unlock_cursor();
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Local;
                     }
@@ -365,6 +396,10 @@ async fn handle_client<S>(
                             match recv.on_file_end(id, checksum).await {
                                 Ok((name, _path)) => {
                                     info!("Arquivo recebido: '{}'", name);
+                                    state.send_notification(
+                                        "Movex — Arquivo Recebido",
+                                        &format!("📁 {}", name),
+                                    ).await;
                                     state.stats.inc_file_received();
                                 }
                                 Err(e) => {
@@ -384,6 +419,7 @@ async fn handle_client<S>(
         }
     }
 
+    capture.unlock_cursor(); // garantir que o cursor não fique preso ao desconectar
     capture.stop();
     { *state.message_tx.lock().await = None; }
     {
@@ -392,6 +428,10 @@ async fn handle_client<S>(
         let mut started = state.session_started_at.lock().await;
         *started = None;
     }
+    state.send_notification(
+        "Movex — Desconectado",
+        &format!("Sessão encerrada com {}", peer_hostname),
+    ).await;
     info!("Conexão com {} encerrada", peer_addr);
 }
 

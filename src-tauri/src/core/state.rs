@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
+use tauri::AppHandle;
 use crate::config::Settings;
 use crate::network::protocol::Message;
 use crate::transfer::TransferProgress;
@@ -64,6 +65,8 @@ pub struct AppState {
     pub stats: Arc<SessionStats>,
     /// Flag de modo lock (pausar transição de cursor)
     pub lock_mode: Arc<std::sync::atomic::AtomicBool>,
+    /// AppHandle para enviar notificações do sistema
+    pub app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
 }
 
 impl AppState {
@@ -81,6 +84,16 @@ impl AppState {
             approval_tx: Arc::new(Mutex::new(None)),
             stats: Arc::new(SessionStats::default()),
             lock_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            app_handle: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Envia notificação do sistema se habilitado
+    pub async fn send_notification(&self, title: &str, body: &str) {
+        let notifications_on = self.settings.lock().await.notifications_enabled;
+        if !notifications_on { return; }
+        if let Some(app) = self.app_handle.lock().await.as_ref() {
+            crate::core::notifications::notify(app, title, body);
         }
     }
 

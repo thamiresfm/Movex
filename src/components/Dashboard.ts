@@ -139,12 +139,27 @@ export async function renderDashboard(): Promise<void> {
               <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;">
                 <div>
                   <div class="section-title">Matriz de Telas</div>
-                  <div class="section-sub">Arraste os ícones para mapear as posições físicas dos monitores</div>
+                  <div class="section-sub">Clique nas setas para definir a posição do outro monitor</div>
                 </div>
                 <div style="display:flex;gap:10px;">
                   <button class="btn btn-outline" onclick="sendFileDialog()">📁 Enviar Arquivo</button>
                   <button class="btn btn-outline" id="btnDisconnect" style="display:none;" onclick="doDisconnect()">Desconectar</button>
                   <button class="btn btn-cyan" id="btnConnect">Conectar</button>
+                </div>
+              </div>
+              <!-- Seletor visual de posição do peer -->
+              <div id="peerPositionSelector" style="display:none;margin-bottom:12px;padding:12px;background:var(--bg-2);border-radius:10px;">
+                <div style="font-size:11px;color:var(--text-3);text-align:center;margin-bottom:8px;">Posição do monitor remoto:</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:4px;width:120px;margin:0 auto;">
+                  <div></div>
+                  <button onclick="setPeerPosition('above')" id="pos-above" class="btn btn-outline" style="padding:6px;font-size:14px;">↑</button>
+                  <div></div>
+                  <button onclick="setPeerPosition('left')"  id="pos-left"  class="btn btn-outline" style="padding:6px;font-size:14px;">←</button>
+                  <div style="background:var(--cyan-dim);border:1px solid var(--border-c);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--cyan);">📍</div>
+                  <button onclick="setPeerPosition('right')" id="pos-right" class="btn btn-cyan"    style="padding:6px;font-size:14px;">→</button>
+                  <div></div>
+                  <button onclick="setPeerPosition('below')" id="pos-below" class="btn btn-outline" style="padding:6px;font-size:14px;">↓</button>
+                  <div></div>
                 </div>
               </div>
               <div id="screenMap" style="display:flex;align-items:center;justify-content:center;gap:24px;padding:20px 0;"></div>
@@ -192,9 +207,9 @@ export async function renderDashboard(): Promise<void> {
           <!-- SEGURANÇA — Logs -->
           <div class="page" id="page-seguranca">
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
-              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Tempo de Atividade</div><div style="font-size:36px;font-weight:700;color:var(--text);letter-spacing:-1px;" id="uptimeVal">0<span style="font-size:14px;color:var(--text-2);margin-left:4px;">Horas</span></div></div>
-              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Ameaças Bloqueadas</div><div style="font-size:36px;font-weight:700;color:var(--text);letter-spacing:-1px;">0<span style="font-size:14px;color:var(--text-2);margin-left:4px;">Ativas</span></div></div>
-              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Tráfego de Rede</div><div style="display:flex;align-items:flex-end;gap:6px;height:40px;margin-top:8px;">${[50,70,40,80,55,35,95].map((h,i)=>`<div style="flex:1;border-radius:3px 3px 0 0;background:${i===3||i===6?'var(--cyan)':'var(--bg-5)'};height:${h}%;min-height:8px;"></div>`).join('')}</div></div>
+              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Tempo de Sessão</div><div style="font-size:28px;font-weight:700;color:var(--text);letter-spacing:-1px;" id="uptimeVal">--</div></div>
+              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Dados Transferidos</div><div style="font-size:28px;font-weight:700;color:var(--text);letter-spacing:-1px;" id="bytesTransferred">0 B</div><div style="font-size:10px;color:var(--text-3);margin-top:4px;" id="eventsCount">0 eventos</div></div>
+              <div class="card"><div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:12px;">Arquivos Trocados</div><div style="font-size:28px;font-weight:700;color:var(--text);letter-spacing:-1px;" id="filesCount">0</div><div style="font-size:10px;color:var(--text-3);margin-top:4px;">enviados + recebidos</div></div>
             </div>
 
             <div class="card" style="overflow:hidden;padding:0;margin-bottom:20px;">
@@ -560,6 +575,9 @@ export async function renderDashboard(): Promise<void> {
         btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
       }
       updateDevices(status, settings);
+      // Mostrar seletor de posição quando conectado
+      const posSelector = document.getElementById('peerPositionSelector');
+      if (posSelector) posSelector.style.display = status.connected ? 'block' : 'none';
       // Borda luminosa — cliente ativo
       const isClient = settings.role === 'client';
       const isRemoteActive = status.active_screen === 'Remote';
@@ -574,8 +592,18 @@ export async function renderDashboard(): Promise<void> {
           return `${n} B`;
         };
         const total = (stats.bytes_sent ?? 0) + (stats.bytes_received ?? 0);
+        const totalEvents = (stats.events_sent ?? 0) + (stats.events_received ?? 0);
+        const totalFiles = (stats.files_sent ?? 0) + (stats.files_received ?? 0);
+        // Painel principal
         const nodesEl = document.getElementById('nodesLabel');
         if (nodesEl && status.connected) nodesEl.textContent = `2 Nós Conectados · ${bytes(total)} transferidos`;
+        // Aba Segurança — dados reais
+        const bytesEl = document.getElementById('bytesTransferred');
+        if (bytesEl) bytesEl.textContent = bytes(total);
+        const eventsEl = document.getElementById('eventsCount');
+        if (eventsEl) eventsEl.textContent = `${totalEvents.toLocaleString()} eventos`;
+        const filesEl = document.getElementById('filesCount');
+        if (filesEl) filesEl.textContent = String(totalFiles);
       } catch { /* sem stats */ }
       // Transferências
       try {
@@ -710,7 +738,7 @@ export async function renderDashboard(): Promise<void> {
         port,
         pskHex: keyVal || s.psk_hex, // usar valor digitado se não estiver vazio
         peerPosition: s.peer_position ?? 'right',
-        autostart: (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? s.autostart ?? false,
+        autostart: s.autostart ?? false,
         theme: s.theme ?? 'dark',
       });
       addLog("Configurações salvas com sucesso.", "sec");
@@ -814,6 +842,41 @@ export async function renderDashboard(): Promise<void> {
     addLog('Desconectado.', 'info');
   };
 
+  // ── Posicionamento do peer no mapa de telas ────────────────────────────────
+  (window as any).setPeerPosition = async (position: string) => {
+    await invoke('save_settings', {
+      hostname: cachedSettings?.hostname ?? '',
+      role: cachedSettings?.role ?? 'server',
+      serverAddr: cachedSettings?.server_addr ?? null,
+      port: cachedSettings?.port ?? 24800,
+      pskHex: cachedSettings?.psk_hex ?? '',
+      peerPosition: position,
+      autostart: cachedSettings?.autostart ?? false,
+      theme: cachedSettings?.theme ?? 'dark',
+    }).catch(console.warn);
+    await refreshSettings();
+    addLog(`Posição do monitor remoto: ${position}`, 'info');
+    // Atualizar visual dos botões
+    ['above','below','left','right'].forEach(p => {
+      const btn = document.getElementById(`pos-${p}`);
+      if (btn) {
+        btn.className = p === position ? 'btn btn-cyan' : 'btn btn-outline';
+        (btn as HTMLButtonElement).style.cssText = 'padding:6px;font-size:14px;';
+      }
+    });
+  };
+
+  // Mostrar seletor de posição quando conectado
+  const posSelector = document.getElementById('peerPositionSelector');
+  if (posSelector && cachedSettings) {
+    // Marcar posição atual
+    const currentPos = cachedSettings.peer_position ?? 'right';
+    ['above','below','left','right'].forEach(p => {
+      const btn = document.getElementById(`pos-${p}`);
+      if (btn) btn.className = p === currentPos ? 'btn btn-cyan' : 'btn btn-outline';
+    });
+  }
+
   // ── Tema claro/escuro ──────────────────────────────────────────────────────
   (window as any).setTheme = async (theme: string) => {
     const { applyTheme } = await import('../main');
@@ -827,6 +890,7 @@ export async function renderDashboard(): Promise<void> {
     await invoke('update_preferences', {
       notificationsEnabled: (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? true,
       lockKey: (document.getElementById('lockKeyInput') as HTMLInputElement)?.value ?? 'ctrl+alt+l',
+      clipboardSyncEnabled: (document.getElementById('clipboardToggle') as HTMLInputElement)?.checked ?? true,
       theme,
     }).catch(console.warn);
     addLog(`Tema alterado: ${theme}`, 'info');

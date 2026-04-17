@@ -37,6 +37,7 @@ pub struct SettingsPayload {
     pub setup_complete: bool,
     pub notifications_enabled: bool,
     pub lock_key: String,
+    pub clipboard_sync_enabled: bool,
     pub recent_peers: Vec<crate::config::settings::RecentPeer>,
     pub lock_mode: bool,
 }
@@ -94,6 +95,7 @@ async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, 
         setup_complete: s.setup_complete,
         notifications_enabled: s.notifications_enabled,
         lock_key: s.lock_key.clone(),
+        clipboard_sync_enabled: s.clipboard_sync_enabled,
         recent_peers: s.recent_peers.clone(),
         lock_mode: state.lock_mode.load(std::sync::atomic::Ordering::Relaxed),
     })
@@ -459,19 +461,51 @@ async fn switch_role(state: State<'_, SharedState>, role: String) -> Result<(), 
     Ok(())
 }
 
-/// Atualizar apenas as preferências sem reiniciar conexão
+/// Atualizar preferências — re-registra atalho global se mudou
 #[tauri::command]
 async fn update_preferences(
+    app: tauri::AppHandle,
     state: State<'_, SharedState>,
     notifications_enabled: bool,
     lock_key: String,
+    clipboard_sync_enabled: bool,
     theme: String,
 ) -> Result<(), String> {
-    let mut s = state.settings.lock().await;
-    s.notifications_enabled = notifications_enabled;
-    s.lock_key = lock_key.clone();
-    s.theme = theme;
-    s.save()?;
+    let old_key = { state.settings.lock().await.lock_key.clone() };
+    {
+        let mut s = state.settings.lock().await;
+        s.notifications_enabled = notifications_enabled;
+        s.lock_key = lock_key.clone();
+        s.clipboard_sync_enabled = clipboard_sync_enabled;
+        s.theme = theme;
+        s.save()?;
+    }
+
+    // Re-registrar atalho global se o lock_key mudou
+    if old_key != lock_key {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        // Remover atalho antigo
+        if let Err(e) = app.global_shortcut().unregister(old_key.as_str()) {
+            tracing::warn!("Falha ao remover atalho antigo '{}': {}", old_key, e);
+        }
+        // Registrar novo atalho
+        let state_for_new = state.inner().clone();
+        if let Err(e) = app.global_shortcut().on_shortcut(
+            lock_key.as_str(),
+            move |_app, _shortcut, event| {
+                use tauri_plugin_global_shortcut::ShortcutState;
+                if event.state == ShortcutState::Pressed {
+                    use std::sync::atomic::Ordering;
+                    let was = state_for_new.lock_mode.fetch_xor(true, Ordering::AcqRel);
+                    tracing::info!("Novo atalho: modo lock toggled → {}", !was);
+                }
+            },
+        ) {
+            tracing::warn!("Falha ao registrar novo atalho '{}': {}", lock_key, e);
+        } else {
+            tracing::info!("Atalho global atualizado: '{}'", lock_key);
+        }
+    }
     Ok(())
 }
 
@@ -653,6 +687,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shared_state.clone())
         .setup(move |app| {
+            // Registrar AppHandle para notificações
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::block_on(async {
+                    *shared_state.app_handle.lock().await = Some(handle);
+                });
+            }
+
             // ── System Tray ──────────────────────────────────────────────────
             use tauri::{
                 tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},

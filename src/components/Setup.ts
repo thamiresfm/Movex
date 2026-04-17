@@ -57,17 +57,38 @@ export async function renderSetup(): Promise<void> {
             </div>
           </div>
 
-          <!-- Campos: endereço + hostname na mesma linha quando cliente -->
+          <!-- Campos de configuração -->
           <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px;">
+            <!-- Endereço do servidor (só cliente) -->
             <div id="server-addr-field" style="display:none;">
               <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Endereço do Servidor</label>
               <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+              <div style="font-size:10px;color:var(--text-3);margin-top:4px;">IP ou hostname do servidor na rede local</div>
             </div>
+            <!-- Nome da máquina -->
             <div>
               <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Nome desta máquina</label>
               <input id="hostnameInput" type="text" value="${settings.hostname}"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'Inter',sans-serif;font-size:13px;color:var(--text);outline:none;" />
+            </div>
+            <!-- Porta TCP + posição do peer -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Porta TCP</label>
+                <input id="portInput" type="number" value="${settings.port ?? 24800}"
+                  style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Posição do outro monitor</label>
+                <select id="peerPositionInput"
+                  style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-size:13px;color:var(--text);outline:none;">
+                  <option value="right" ${(settings.peer_position ?? 'right') === 'right' ? 'selected' : ''}>→ À Direita</option>
+                  <option value="left"  ${settings.peer_position === 'left'  ? 'selected' : ''}>← À Esquerda</option>
+                  <option value="above" ${settings.peer_position === 'above' ? 'selected' : ''}>↑ Acima</option>
+                  <option value="below" ${settings.peer_position === 'below' ? 'selected' : ''}>↓ Abaixo</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -134,10 +155,12 @@ export async function renderSetup(): Promise<void> {
     const serverAddr = (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null;
     if (!hostname) { alert('Digite o nome desta máquina.'); return; }
 
+    const port = parseInt((document.getElementById('portInput') as HTMLInputElement)?.value) || 24800;
+    const peerPosition = (document.getElementById('peerPositionInput') as HTMLSelectElement)?.value || 'right';
     await invoke('save_settings', {
       hostname, role: selectedMode, serverAddr,
-      port: 24800, pskHex: settings.psk_hex,
-      peerPosition: 'right', autostart: false, theme: 'dark'
+      port, pskHex: settings.psk_hex,
+      peerPosition, autostart: false, theme: 'dark'
     }).catch(console.warn);
 
     showStep(2);

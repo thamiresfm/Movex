@@ -183,6 +183,9 @@ async fn run_session<S>(
 {
     let mut last_clipboard: Option<String> = None;
     let mut clipboard_check = tokio::time::interval(std::time::Duration::from_millis(500));
+    // Ping periódico para medir latência no lado cliente
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(3));
+    let mut ping_sent_at: Option<std::time::Instant> = None;
 
     let mut file_receiver = match crate::transfer::FileReceiver::new().await {
         Ok(r) => Some(r),
@@ -206,8 +209,16 @@ async fn run_session<S>(
                 }
             }
 
-            // Verificar clipboard periodicamente — texto E imagens
+            // Ping periódico para medir latência
+            _ = ping_interval.tick() => {
+                ping_sent_at = Some(std::time::Instant::now());
+                if send_message(stream, &Message::Ping).await.is_err() { break; }
+            }
+
+            // Verificar clipboard periodicamente — texto E imagens (se habilitado)
             _ = clipboard_check.tick() => {
+                let sync_enabled = state.settings.lock().await.clipboard_sync_enabled;
+                if !sync_enabled { continue; }
                 if let Some(msg) = crate::clipboard::sync::create_clipboard_message() {
                     // Hash CRC32 do conteúdo para detectar mudanças reais (não só tamanho)
                     let key = match &msg {
@@ -278,7 +289,16 @@ async fn run_session<S>(
                     Ok(Message::Ping) => {
                         let _ = send_message(stream, &Message::Pong).await;
                     }
-                    Ok(Message::Pong) => {}
+                    Ok(Message::Pong) => {
+                        // Medir latência RTT no cliente
+                        if let Some(sent) = ping_sent_at.take() {
+                            let rtt = sent.elapsed().as_millis() as u32;
+                            let mut status = state.connection_status.lock().await;
+                            if let ConnectionStatus::Connected { ref mut latency_ms, .. } = *status {
+                                *latency_ms = rtt;
+                            }
+                        }
+                    }
                     Ok(Message::Disconnect { reason }) => {
                         info!("Servidor desconectou: {}", reason);
                         break;
