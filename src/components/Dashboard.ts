@@ -6,7 +6,6 @@ import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
 import { initStatusListener, onStatusChange, startApprovalPolling, cleanupStatusHandlers } from "./ConnectionStatus";
 import { cleanupAllListeners } from "../utils/tauri-events";
 
-/** Escapa caracteres especiais HTML — usada em todo o módulo para prevenir XSS */
 function esc(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -1194,34 +1193,82 @@ function renderDiscoveredDevices(peers: PeerInfo[]) {
     addr: p.addr,
     port: p.port,
   }));
-  grid.innerHTML = deviceCards(devices);
+
+  // Usar createElement em vez de innerHTML para evitar XSS via onclick inline
+  grid.innerHTML = '';
+  renderDeviceCards(grid, devices);
 }
 
-function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;addr:string|null;port:number}[]): string {
-  // esc() definida no escopo do módulo (linha ~9) — não redefinir aqui
-  return devices.map(d => {
-    const onclick = d.addr
-      ? `onclick="connectToPeer('${esc(d.addr)}', ${Number(d.port)})"` : '';
-    return `
-      <div ${onclick}
-        style="background:var(--bg-3);border:1px solid ${d.online?'rgba(0,212,255,.2)':'var(--border)'};
-               border-radius:14px;padding:20px;${d.addr?'cursor:pointer;':''}transition:all .2s;">
-        <div style="width:44px;height:44px;background:var(--bg-4);border-radius:11px;
-                    display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;">${esc(d.icon)}</div>
-        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">${esc(d.name)}</div>
-        <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;">${esc(d.ip)}</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:10px;
-                       font-weight:600;background:${d.online?'rgba(0,212,255,.12)':'rgba(255,75,110,.1)'};
-                       color:${d.online?'var(--cyan)':'var(--danger)'};">
-            <span style="width:5px;height:5px;border-radius:50%;background:currentColor;"></span>
-            ${d.online ? 'Online' : 'Offline'}
-          </span>
-          ${d.addr ? `<span style="font-size:10px;color:var(--cyan);font-weight:600;">Conectar →</span>` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
+/** Renderiza cards de dispositivos sem innerHTML com handlers inline (previne XSS) */
+function renderDeviceCards(
+  container: HTMLElement,
+  devices: { name: string; ip: string; icon: string; online: boolean; addr: string | null; port: number }[]
+): void {
+  devices.forEach(d => {
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background:var(--bg-3)',
+      `border:1px solid ${d.online ? 'rgba(0,212,255,.2)' : 'var(--border)'}`,
+      'border-radius:14px',
+      'padding:20px',
+      d.addr ? 'cursor:pointer' : '',
+      'transition:all .2s',
+    ].filter(Boolean).join(';');
+
+    // Ícone
+    const iconEl = document.createElement('div');
+    iconEl.style.cssText = 'width:44px;height:44px;background:var(--bg-4);border-radius:11px;display:flex;align-items:center;justify-content:center;margin-bottom:14px;font-size:22px;';
+    iconEl.textContent = d.icon;
+    card.appendChild(iconEl);
+
+    // Nome
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;';
+    nameEl.textContent = d.name;
+    card.appendChild(nameEl);
+
+    // IP
+    const ipEl = document.createElement('div');
+    ipEl.style.cssText = 'font-size:11px;color:var(--text-3);margin-bottom:10px;';
+    ipEl.textContent = d.ip;
+    card.appendChild(ipEl);
+
+    // Rodapé: badge online/offline + link conectar
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+
+    const badge = document.createElement('span');
+    badge.style.cssText = [
+      'display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px',
+      'font-size:10px;font-weight:600',
+      `background:${d.online ? 'rgba(0,212,255,.12)' : 'rgba(255,75,110,.1)'}`,
+      `color:${d.online ? 'var(--cyan)' : 'var(--danger)'}`,
+    ].join(';');
+    const dot = document.createElement('span');
+    dot.style.cssText = 'width:5px;height:5px;border-radius:50%;background:currentColor;';
+    badge.appendChild(dot);
+    badge.appendChild(document.createTextNode(d.online ? ' Online' : ' Offline'));
+    footer.appendChild(badge);
+
+    if (d.addr) {
+      const link = document.createElement('span');
+      link.style.cssText = 'font-size:10px;color:var(--cyan);font-weight:600;';
+      link.textContent = 'Conectar →';
+      footer.appendChild(link);
+    }
+    card.appendChild(footer);
+
+    // Registrar click via addEventListener (sem onclick inline — previne XSS)
+    if (d.addr) {
+      const addr = d.addr;   // captura por closure (evitar referência mutável)
+      const port = d.port;
+      card.addEventListener('click', () => {
+        (window as any).connectToPeer?.(addr, port);
+      });
+    }
+
+    container.appendChild(card);
+  });
 }
 
 function simulateCmd(cmd: string): string {

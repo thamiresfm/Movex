@@ -56,15 +56,21 @@ impl InputCapture for MacOsCapture {
                     CGEventType::KeyUp,
                 ],
                 move |_proxy, event_type, event| {
-                    // Cursor bloqueado na borda → travar posição e bloquear eventos de mouse
-                    if *locked_inner.lock().unwrap() {
+                    // unwrap_or(false): se o lock estiver envenenado, não travar o cursor
+                    let is_locked = locked_inner.lock()
+                        .map(|g| *g)
+                        .unwrap_or(false);
+                    if is_locked {
                         match event_type {
                             CGEventType::MouseMoved
                             | CGEventType::LeftMouseDown
                             | CGEventType::LeftMouseUp
                             | CGEventType::RightMouseDown
                             | CGEventType::RightMouseUp => {
-                                let (lx, ly) = *lock_pos_inner.lock().unwrap();
+                                // unwrap_or: posição segura se lock envenenado
+                                let (lx, ly) = lock_pos_inner.lock()
+                                    .map(|g| *g)
+                                    .unwrap_or((0.0, 0.0));
                                 use core_graphics::geometry::CGPoint;
                                 let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
                                     CGPoint { x: lx, y: ly }

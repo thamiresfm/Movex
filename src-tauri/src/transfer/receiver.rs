@@ -27,9 +27,20 @@ impl FileReceiver {
     }
 
     pub async fn on_file_start(&mut self, id: u32, name: String, size: u64) -> Result<(), String> {
+        // Extrair apenas o componente final do nome para prevenir path traversal
+        let safe_name = std::path::Path::new(&name)
+            .file_name()
+            .ok_or_else(|| format!("Nome de arquivo inválido: '{}'", name))?
+            .to_string_lossy()
+            .to_string();
+        if safe_name.is_empty() || safe_name.starts_with('.') {
+            return Err(format!("Nome de arquivo rejeitado: '{}'", safe_name));
+        }
+
         let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
         let file = File::create(&tmp).await.map_err(|e| e.to_string())?;
-        info!("Recebendo '{}' ({} bytes, id={}) → {:?}", name, size, id, tmp);
+        info!("Recebendo '{}' ({} bytes, id={}) → {:?}", safe_name, size, id, tmp);
+        let name = safe_name;
         self.transfers.insert(
             id,
             Transfer { file, name, hasher: Sha256::new(), received_bytes: 0 },

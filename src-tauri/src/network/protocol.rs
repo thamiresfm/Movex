@@ -49,10 +49,13 @@ pub const CLIPBOARD_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 impl Message {
     /// Serializa para bytes: magic (4) + length (4 big-endian) + payload (bincode)
+    ///
+    /// Retorna erro explícito se o payload exceder u32::MAX (4 GB) em vez de truncar.
     pub fn encode(&self) -> Result<Vec<u8>, bincode::error::EncodeError> {
         let payload = bincode::encode_to_vec(self, bincode::config::standard())?;
-        // Garante que o payload não excede u32::MAX (4 GB) — improvável mas seguro
-        let length = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+        let length = u32::try_from(payload.len()).map_err(|_| {
+            bincode::error::EncodeError::Other("payload excede limite de 4 GB (u32::MAX)")
+        })?;
         let mut buf = Vec::with_capacity(8 + payload.len());
         buf.extend_from_slice(&MAGIC);
         buf.extend_from_slice(&length.to_be_bytes());

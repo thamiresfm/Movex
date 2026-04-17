@@ -20,7 +20,6 @@ pub fn read_clipboard_content() -> ClipboardContent {
             ClipboardContent::None
         }
         Ok(mut cb) => {
-            // Tentar imagem primeiro
             if let Ok(img) = cb.get_image() {
                 let rgba = img.bytes.to_vec();
                 return ClipboardContent::Image {
@@ -29,7 +28,6 @@ pub fn read_clipboard_content() -> ClipboardContent {
                     rgba,
                 };
             }
-            // Fallback para texto
             if let Ok(text) = cb.get_text() {
                 if !text.is_empty() {
                     return ClipboardContent::Text(text);
@@ -86,13 +84,14 @@ pub fn create_clipboard_message() -> Option<Message> {
             Some(Message::ClipboardData { mime: "text/plain".to_string(), data })
         }
         ClipboardContent::Image { width, height, rgba } => {
-            // Comprimir PNG em memória usando encode simples
-            let png_data = encode_rgba_to_png(width, height, &rgba);
+            let png_data = match encode_rgba_to_png_safe(width, height, &rgba) {
+                Ok(d) => d,
+                Err(e) => { warn!("Falha ao codificar imagem PNG: {}", e); return None; }
+            };
             if png_data.len() > CLIPBOARD_MAX_BYTES {
                 warn!("Clipboard imagem excede {}MB — ignorado", CLIPBOARD_MAX_BYTES / 1024 / 1024);
                 return None;
             }
-            // Incluir width/height no mime type para decodificação
             let mime = format!("image/png;w={};h={}", width, height);
             debug!("Clipboard imagem: {}x{} = {} bytes PNG", width, height, png_data.len());
             Some(Message::ClipboardData { mime, data: png_data })
@@ -110,9 +109,7 @@ pub fn apply_clipboard_message(msg: &Message) {
                 info!("Clipboard texto sincronizado: {} bytes", data.len());
             }
         } else if mime.starts_with("image/png") {
-            // Extrair dimensões do mime type: "image/png;w=1920;h=1080"
             let (width, height) = parse_image_mime(mime);
-            // Decodificar PNG → RGBA
             if let Some(rgba) = decode_png_to_rgba(data) {
                 write_clipboard_image(width, height, &rgba);
                 info!("Clipboard imagem sincronizada: {}x{}", width, height);
@@ -121,63 +118,16 @@ pub fn apply_clipboard_message(msg: &Message) {
     }
 }
 
-// ── Codificação PNG mínima ────────────────────────────────────────────────────
+fn encode_rgba_to_png_safe(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    use image::{DynamicImage, RgbaImage};
 
-/// Codifica RGBA para PNG — retorna None se o buffer não corresponde às dimensões
-fn encode_rgba_to_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-    use std::io::Write;
-
-    let expected = (width as usize) * (height as usize) * 4;
-    if rgba.len() < expected {
-        warn!("encode_rgba_to_png: buffer {}B < esperado {}B para {}x{}", rgba.len(), expected, width, height);
-        // Usar apenas os bytes disponíveis (preenchimento com zeros implícito pelo fatiamento)
-    }
-
-    // Usando crc32 do módulo utils compartilhado
-    fn chunk(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
-        let len = (data.len() as u32).to_be_bytes();
-        let mut combined = Vec::with_capacity(4 + data.len());
-        combined.extend_from_slice(tag);
-        combined.extend_from_slice(data);
-        let crc = crate::core::utils::crc32(&combined).to_be_bytes();
-        let mut out = Vec::with_capacity(8 + data.len() + 4);
-        out.extend_from_slice(&len);
-        out.extend_from_slice(&combined);
-        out.extend_from_slice(&crc);
-        out
-    }
-
-    // IHDR
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit RGBA
-
-    // IDAT: filtrar linhas com filter byte 0
-    let mut raw = Vec::with_capacity((width as usize * 4 + 1) * height as usize);
-    for row in 0..height as usize {
-        raw.push(0); // filter none
-        let start = row * width as usize * 4;
-        let end = start + width as usize * 4;
-        raw.extend_from_slice(&rgba[start..end.min(rgba.len())]);
-    }
-    let compressed = miniz_compress(&raw);
-
-    let mut png = Vec::new();
-    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-    png.extend_from_slice(&chunk(b"IHDR", &ihdr));
-    png.extend_from_slice(&chunk(b"IDAT", &compressed));
-    png.extend_from_slice(&chunk(b"IEND", &[]));
-    png
-}
-
-/// Compressão zlib real via flate2 (nível fast — boa compressão, baixa latência)
-fn miniz_compress(data: &[u8]) -> Vec<u8> {
-    use flate2::{write::ZlibEncoder, Compression};
-    use std::io::Write;
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-    encoder.write_all(data).unwrap_or_default();
-    encoder.finish().unwrap_or_default()
+    let img = RgbaImage::from_raw(width, height, rgba.to_vec())
+        .ok_or_else(|| format!("Buffer RGBA inválido para {}x{}", width, height))?;
+    let mut out: Vec<u8> = Vec::new();
+    DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| format!("Falha ao codificar PNG: {}", e))?;
+    Ok(out)
 }
 
 /// Decodifica PNG → bytes RGBA raw (obrigatório para arboard::set_image)
@@ -226,7 +176,7 @@ mod tests {
     #[test]
     fn encode_png_produces_valid_header() {
         let rgba = vec![255u8; 4 * 4 * 4]; // 4x4 white image
-        let png = encode_rgba_to_png(4, 4, &rgba);
+        let png = encode_rgba_to_png_safe(4, 4, &rgba).expect("encode PNG falhou no teste");
         assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n");
     }
 

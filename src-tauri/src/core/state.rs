@@ -11,8 +11,11 @@ use crate::core::stats::SessionStats;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
     Disconnected,
+    /// Servidor aberto, aguardando conexão de clientes
+    Listening,
+    /// Cliente tentando alcançar o servidor
     Connecting,
-    /// Handshake TLS em andamento — aguardando aprovação do usuário
+    /// Handshake autenticado — aguardando aprovação do usuário local
     PendingApproval { peer_hostname: String },
     Connected { peer_hostname: String, latency_ms: u32 },
     Reconnecting { attempt: u32 },
@@ -22,7 +25,8 @@ impl std::fmt::Display for ConnectionStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Disconnected => write!(f, "Desconectado"),
-            Self::Connecting => write!(f, "Conectando..."),
+            Self::Listening    => write!(f, "Aguardando conexão..."),
+            Self::Connecting   => write!(f, "Conectando..."),
             Self::PendingApproval { peer_hostname } => {
                 write!(f, "Aguardando aprovação de {}", peer_hostname)
             }
@@ -70,6 +74,8 @@ pub struct AppState {
     pub lock_mode: Arc<std::sync::atomic::AtomicBool>,
     /// AppHandle para enviar notificações do sistema
     pub app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
+    /// Endereço de sessão temporário — usado por connect_to_peer sem sobrescrever settings
+    pub session_server_addr: Arc<Mutex<Option<(String, u16)>>>,
 }
 
 impl AppState {
@@ -89,6 +95,7 @@ impl AppState {
             stats: Arc::new(SessionStats::default()),
             lock_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
+            session_server_addr: Arc::new(Mutex::new(None)),
         }
     }
 

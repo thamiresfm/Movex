@@ -30,6 +30,8 @@ pub struct SettingsPayload {
     pub role: String,
     pub server_addr: Option<String>,
     pub port: u16,
+    /// Apenas os primeiros 8 caracteres são enviados ao frontend para exibição/confirmação.
+    /// O valor completo nunca deixa o processo Rust — reduz exposição via WebView/XSS.
     pub psk_hex: String,
     pub peer_position: String,
     pub autostart: bool,
@@ -83,12 +85,14 @@ async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, Stri
 #[tauri::command]
 async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, String> {
     let s = state.settings.lock().await;
+    // Expor apenas os primeiros 8 hex chars (4 bytes) para confirmação visual na UI
+    let psk_preview = format!("{}...", &s.psk_hex[..s.psk_hex.len().min(8)]);
     Ok(SettingsPayload {
         hostname: s.hostname.clone(),
         role: format!("{:?}", s.role).to_lowercase(),
         server_addr: s.server_addr.clone(),
         port: s.port,
-        psk_hex: s.psk_hex.clone(),
+        psk_hex: psk_preview,
         peer_position: s.peer_position.to_string(),
         autostart: s.autostart,
         theme: s.theme.clone(),
@@ -123,7 +127,10 @@ async fn save_settings(
         s.role = if role == "server" { Role::Server } else { Role::Client };
         s.server_addr = server_addr;
         s.port = port;
-        s.psk_hex = psk_hex;
+        // Não sobrescrever a chave se o frontend enviou o preview truncado ("xxxx...")
+        if !psk_hex.ends_with("...") && psk_hex.len() >= 16 {
+            s.psk_hex = psk_hex;
+        }
         s.peer_position = crate::config::ScreenPosition::from(peer_position.as_ref());
         s.autostart = autostart;
         s.theme = theme;
@@ -290,7 +297,14 @@ async fn send_file_to_peer(
         tracing::info!("Enviando '{}' ({} bytes) ao peer...", file_name, file_size);
 
         // Enviar via canal: ler arquivo em chunks e enfileirar mensagens
-        match send_file_via_channel(&path, transfer_id, file_size, file_name.clone(), &tx).await {
+        match send_file_via_channel(
+            &path,
+            transfer_id,
+            file_size,
+            file_name.clone(),
+            &tx,
+            state_clone.transfers.clone(),
+        ).await {
             Ok(_) => {
                 tracing::info!("Arquivo '{}' enviado com sucesso", file_name);
                 state_clone.transfers.lock().await.remove(&transfer_id);
@@ -305,13 +319,14 @@ async fn send_file_to_peer(
     Ok(())
 }
 
-/// Lê arquivo em chunks e enfileira mensagens no canal do peer
+/// Lê arquivo em chunks e enfileira mensagens; atualiza `sent_bytes` para barra de progresso
 async fn send_file_via_channel(
     path: &std::path::Path,
     id: u32,
     size: u64,
     name: String,
     tx: &tokio::sync::mpsc::Sender<crate::network::protocol::Message>,
+    transfers: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u32, crate::transfer::TransferProgress>>>,
 ) -> Result<(), String> {
     use tokio::io::AsyncReadExt;
     use sha2::{Digest, Sha256};
@@ -323,12 +338,22 @@ async fn send_file_via_channel(
     let mut hasher = Sha256::new();
     let mut seq = 0u32;
     let mut buf = vec![0u8; crate::network::protocol::FILE_CHUNK_SIZE];
+    let mut sent: u64 = 0;
 
     loop {
         let n = file.read(&mut buf).await.map_err(|e| e.to_string())?;
         if n == 0 { break; }
         let chunk = buf[..n].to_vec();
         hasher.update(&chunk);
+        sent += n as u64;
+
+        // Atualizar progresso para o frontend
+        if let Ok(mut map) = transfers.try_lock() {
+            if let Some(p) = map.get_mut(&id) {
+                p.sent_bytes = sent;
+            }
+        }
+
         tx.send(crate::network::protocol::Message::FileChunk { id, seq, data: chunk })
             .await.map_err(|e| e.to_string())?;
         seq += 1;
@@ -376,26 +401,22 @@ async fn get_transfers(
     Ok(transfers.values().cloned().collect())
 }
 
-/// Conecta diretamente a um peer descoberto via mDNS
+/// Conecta diretamente a um peer descoberto via mDNS.
+/// O endereço é armazenado apenas na sessão — não sobrescreve settings persistidas.
 #[tauri::command]
 async fn connect_to_peer(
     state: State<'_, SharedState>,
     addr: String,
     port: u16,
 ) -> Result<(), String> {
-    {
-        let mut s = state.settings.lock().await;
-        s.server_addr = Some(addr);
-        s.port = port;
-        s.role = Role::Client;
-        s.save()?;
-    }
-    // Cancelar conexão anterior antes de reconectar
+    // Guardar endereço de sessão sem persistir
+    { *state.session_server_addr.lock().await = Some((addr.clone(), port)); }
+
     state.cancel_connection().await;
     let cancel = state.new_cancel_token().await;
     let state_clone = state.inner().clone();
     tokio::spawn(async move {
-        core::client::connect(state_clone, cancel).await;
+        core::client::connect_to_addr(state_clone, addr, port, cancel).await;
     });
     Ok(())
 }
@@ -469,7 +490,7 @@ async fn switch_role(state: State<'_, SharedState>, role: String) -> Result<(), 
     Ok(())
 }
 
-/// Atualizar preferências — re-registra atalho global se mudou
+/// Atualizar preferências — re-registra atalho global se mudou.
 #[tauri::command]
 async fn update_preferences(
     app: tauri::AppHandle,
@@ -479,41 +500,53 @@ async fn update_preferences(
     clipboard_sync_enabled: bool,
     theme: String,
 ) -> Result<(), String> {
-    let old_key = { state.settings.lock().await.lock_key.clone() };
-    {
-        let mut s = state.settings.lock().await;
-        s.notifications_enabled = notifications_enabled;
-        s.lock_key = lock_key.clone();
-        s.clipboard_sync_enabled = clipboard_sync_enabled;
-        s.theme = theme;
-        s.save()?;
+    // Validar formato do atalho antes de persistir — evitar estado inconsistente
+    if lock_key.trim().is_empty() {
+        return Err("Atalho de teclado não pode ser vazio".to_string());
     }
 
-    // Re-registrar atalho global se o lock_key mudou
+    let old_key = { state.settings.lock().await.lock_key.clone() };
+
+    // Testar se o novo atalho é reconhecido pelo plugin antes de salvar
     if old_key != lock_key {
         use tauri_plugin_global_shortcut::GlobalShortcutExt;
-        // Remover atalho antigo
-        if let Err(e) = app.global_shortcut().unregister(old_key.as_str()) {
-            tracing::warn!("Falha ao remover atalho antigo '{}': {}", old_key, e);
-        }
-        // Registrar novo atalho
         let state_for_new = state.inner().clone();
-        if let Err(e) = app.global_shortcut().on_shortcut(
+        let register_result = app.global_shortcut().on_shortcut(
             lock_key.as_str(),
             move |_app, _shortcut, event| {
                 use tauri_plugin_global_shortcut::ShortcutState;
                 if event.state == ShortcutState::Pressed {
                     use std::sync::atomic::Ordering;
                     let was = state_for_new.lock_mode.fetch_xor(true, Ordering::AcqRel);
-                    tracing::info!("Novo atalho: modo lock toggled → {}", !was);
+                    tracing::info!("Atalho: modo lock → {}", !was);
                 }
             },
-        ) {
-            tracing::warn!("Falha ao registrar novo atalho '{}': {}", lock_key, e);
-        } else {
-            tracing::info!("Atalho global atualizado: '{}'", lock_key);
+        );
+
+        match register_result {
+            Ok(_) => {
+                // Novo atalho registrado com sucesso — remover o antigo
+                if let Err(e) = app.global_shortcut().unregister(old_key.as_str()) {
+                    tracing::warn!("Falha ao remover atalho antigo '{}': {}", old_key, e);
+                }
+                tracing::info!("Atalho global atualizado: '{}'", lock_key);
+            }
+            Err(e) => {
+                // Atalho inválido — retornar erro sem persistir nem alterar o anterior
+                return Err(format!("Atalho '{}' inválido ou já em uso: {}", lock_key, e));
+            }
         }
     }
+
+    {
+        let mut s = state.settings.lock().await;
+        s.notifications_enabled = notifications_enabled;
+        s.lock_key = lock_key;
+        s.clipboard_sync_enabled = clipboard_sync_enabled;
+        s.theme = theme;
+        s.save()?;
+    }
+
     Ok(())
 }
 
@@ -589,7 +622,14 @@ async fn drop_file_to_peer(
         let tx_clone = tx.clone();
         let state_clone = state.inner().clone();
         tokio::spawn(async move {
-            match send_file_via_channel(&path, transfer_id, file_size, file_name.clone(), &tx_clone).await {
+            match send_file_via_channel(
+                &path,
+                transfer_id,
+                file_size,
+                file_name.clone(),
+                &tx_clone,
+                state_clone.transfers.clone(),
+            ).await {
                 Ok(_) => { state_clone.stats.inc_file_sent(); }
                 Err(e) => tracing::error!("drop_file_to_peer: {}", e),
             }
@@ -673,10 +713,9 @@ async fn set_screen_border(
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn run() {
-    // Instalar o CryptoProvider do rustls antes de qualquer conexão TLS
     if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
-        // Pode falhar se já instalado — apenas logar, não é fatal
-        tracing::debug!("CryptoProvider já instalado: {:?}", e);
+        // Falha esperada se já instalado em outro ponto de entrada
+        tracing::debug!("CryptoProvider: {:?}", e);
     }
 
     tracing_subscriber::fmt()
@@ -698,7 +737,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shared_state.clone())
         .setup(move |app| {
-            // Registrar AppHandle para notificações
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::block_on(async {
@@ -720,15 +758,10 @@ pub fn run() {
 
             let menu = Menu::with_items(app, &[&show, &sep, &lock, &disco, &sep, &quit])?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(match app.default_window_icon() {
-                    Some(icon) => icon.clone(),
-                    None => {
-                        tracing::warn!("Ícone padrão não encontrado — system tray sem ícone");
-                        // Continuar sem ícone em vez de crash
-                        return Ok(());
-                    }
-                })
+            // Tray é opcional — não bloquear auto-start se o ícone estiver ausente
+            if let Some(icon) = app.default_window_icon().map(|i| i.clone()) {
+                let _tray = TrayIconBuilder::new()
+                .icon(icon)
                 .menu(&menu)
                 .tooltip("Movex — KVM por software")
                 .on_menu_event({
@@ -745,7 +778,6 @@ pub fn run() {
                             }
                             "lock" => {
                                 use std::sync::atomic::Ordering;
-                                // fetch_xor atômico — mesma abordagem do toggle_lock IPC
                                 let was = state_tray.lock_mode.fetch_xor(true, Ordering::AcqRel);
                                 tracing::info!("Tray: modo lock {}", if !was { "ATIVO" } else { "INATIVO" });
                             }
@@ -775,9 +807,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            } else {
+                tracing::warn!("Ícone padrão não encontrado — system tray desativada");
+            }
 
             // ── Atalho global para modo lock ─────────────────────────────────
-            // Atalho global para modo lock
             {
                 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
                 let state_for_shortcut = shared_state.clone();
@@ -789,7 +823,6 @@ pub fn run() {
                     move |_app, _shortcut, event| {
                         if event.state == ShortcutState::Pressed {
                             use std::sync::atomic::Ordering;
-                            // fetch_xor atômico — evita race condition com tray e IPC
                             let was = state_for_shortcut.lock_mode.fetch_xor(true, Ordering::AcqRel);
                             tracing::info!("Atalho: modo lock toggled → {}", !was);
                         }
@@ -800,7 +833,6 @@ pub fn run() {
             }
 
             // ── Auto-start da conexão ao abrir o app ─────────────────────────
-            // Se o setup já foi concluído, iniciar servidor ou cliente automaticamente
             {
                 let setup_done = tauri::async_runtime::block_on(async {
                     shared_state.settings.lock().await.setup_complete

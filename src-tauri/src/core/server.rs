@@ -8,21 +8,20 @@ use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
 use crate::core::stats::get_primary_screen_size;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::transport::{
-    create_tls_acceptor, generate_self_signed_cert, recv_message, send_message,
+    create_tls_acceptor, load_or_generate_server_cert, recv_message, send_message,
 };
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
 
-/// Inicia o servidor Movex com cancelamento e envio de input ao cliente
+/// Inicia o servidor Movex com cancelamento e envio de input ao cliente.
 pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), String> {
     let port = { state.settings.lock().await.port };
 
-    let (certs, key) = generate_self_signed_cert()
-        .map_err(|e| format!("Erro ao gerar certificado TLS: {}", e))?;
+    let (certs, key) = load_or_generate_server_cert()
+        .map_err(|e| format!("Erro ao carregar certificado TLS: {}", e))?;
     let acceptor = create_tls_acceptor(certs, key)
         .map_err(|e| format!("Erro ao criar TLS acceptor: {}", e))?;
 
-    // Iniciar mDNS ao subir o servidor
     let (hostname, mdns_port) = {
         let s = state.settings.lock().await;
         (s.hostname.clone(), s.port)
@@ -37,10 +36,9 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
     info!("Servidor Movex escutando em {}", addr);
     {
         let mut status = state.connection_status.lock().await;
-        *status = ConnectionStatus::Connecting;
+        *status = ConnectionStatus::Listening;
     }
 
-    // Aceitar apenas um cliente por vez — desconectar o anterior se houver
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -50,20 +48,22 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
             result = listener.accept() => {
                 match result {
                     Ok((tcp_stream, peer_addr)) => {
-                        // Já há cliente conectado? Rejeitar.
-                        // Bloquear nova conexão se já há uma ativa ou em aprovação
-                        let busy = matches!(
-                            *state.connection_status.lock().await,
-                            ConnectionStatus::Connected { .. } | ConnectionStatus::PendingApproval { .. }
-                        );
-                        if busy {
-                            warn!("Rejeitando nova conexão de {} — já há cliente conectado ou aprovação pendente", peer_addr);
-                            continue;
-                        }
-                        // Marcar como PendingApproval atomicamente para evitar race condition
+                        // Verificar e reservar slot em um único lock para evitar race condition
                         {
                             let mut status = state.connection_status.lock().await;
-                            *status = ConnectionStatus::PendingApproval { peer_hostname: peer_addr.to_string() };
+                            if matches!(
+                                *status,
+                                ConnectionStatus::Connected { .. } | ConnectionStatus::PendingApproval { .. }
+                            ) {
+                                warn!(
+                                    "Rejeitando nova conexão de {} — já há cliente conectado ou aprovação pendente",
+                                    peer_addr
+                                );
+                                continue;
+                            }
+                            *status = ConnectionStatus::PendingApproval {
+                                peer_hostname: peer_addr.to_string(),
+                            };
                         }
 
                         info!("Nova conexão TCP de {}", peer_addr);
@@ -99,8 +99,7 @@ async fn handle_client<S>(
 ) where
     S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin + Send + 'static,
 {
-    // ── Handshake com PSK correta ────────────────────────────────────────────
-    // 1. Servidor envia ServerChallenge com nonce aleatório
+    // Handshake: enviar nonce → receber Hello com HMAC → validar PSK
     let server_nonce = hex::encode(rand::random::<[u8; 32]>());
     let our_hostname_for_challenge = { state.settings.lock().await.hostname.clone() };
     if let Err(e) = send_message(&mut stream, &Message::ServerChallenge {
@@ -112,7 +111,6 @@ async fn handle_client<S>(
         return;
     }
 
-    // 2. Receber Hello com HMAC do cliente
     let hello = match recv_message(&mut stream).await {
         Ok(m) => m,
         Err(e) => { warn!("Erro ao receber Hello de {}: {}", peer_addr, e); return; }
@@ -126,7 +124,6 @@ async fn handle_client<S>(
                 }).await;
                 return;
             }
-            // 3. Validar HMAC
             let psk_hex = { state.settings.lock().await.psk_hex.clone() };
             if !crate::core::auth::verify_hmac(&psk_hex, &server_nonce, &hmac) {
                 warn!("PSK incorreta de {} — rejeitando conexão", peer_addr);
@@ -140,15 +137,12 @@ async fn handle_client<S>(
         _ => { warn!("Esperava Hello de {}", peer_addr); return; }
     };
 
-    // ── Solicitar aprovação do usuário ──────────────────────────────────────
     let our_hostname = { state.settings.lock().await.hostname.clone() };
 
-    // Avisar o cliente que está aguardando aprovação
     let _ = send_message(&mut stream, &Message::ConnectionPending {
         hostname: our_hostname.clone(),
     }).await;
 
-    // Registrar no estado para a UI exibir o modal
     let (approval_tx, approval_rx) = tokio::sync::oneshot::channel::<bool>();
     {
         *state.pending_approval.lock().await = Some(peer_hostname.clone());
@@ -161,13 +155,11 @@ async fn handle_client<S>(
         &format!("{} quer controlar este computador", peer_hostname),
     ).await;
 
-    // Aguardar decisão com timeout de 60 segundos
     let approved = tokio::time::timeout(
         std::time::Duration::from_secs(60),
         approval_rx,
     ).await;
 
-    // Limpar estado pendente
     {
         *state.pending_approval.lock().await = None;
         *state.approval_tx.lock().await = None;
@@ -175,12 +167,10 @@ async fn handle_client<S>(
 
     match approved {
         Ok(Ok(true)) => {
-            // Aprovado — enviar HelloAck
             info!("Conexão aprovada: {} ({})", peer_hostname, peer_addr);
             let _ = send_message(&mut stream, &Message::ConnectionApproved).await;
         }
         Ok(Ok(false)) => {
-            // Rejeitado pelo usuário
             warn!("Conexão rejeitada pelo usuário: {} ({})", peer_hostname, peer_addr);
             let _ = send_message(&mut stream, &Message::ConnectionRejected {
                 reason: "Conexão recusada pelo usuário do servidor".to_string(),
@@ -188,7 +178,6 @@ async fn handle_client<S>(
             return;
         }
         _ => {
-            // Timeout ou canal fechado
             warn!("Timeout na aprovação de conexão: {} ({})", peer_hostname, peer_addr);
             let _ = send_message(&mut stream, &Message::ConnectionRejected {
                 reason: "Tempo de aprovação esgotado (60s)".to_string(),
@@ -197,19 +186,16 @@ async fn handle_client<S>(
         }
     }
 
-    // Enviar HelloAck — conexão estabelecida
     let _ = send_message(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,
         hostname: our_hostname,
     }).await;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
-    // Notificação de conexão estabelecida
     state.send_notification(
         "Movex — Conectado",
         &format!("Controlando: {}", peer_hostname),
     ).await;
-    // Adicionar ao histórico de peers recentes
     {
         let mut s = state.settings.lock().await;
         s.add_recent_peer(&peer_hostname, &peer_addr.ip().to_string(), peer_addr.port());
@@ -225,11 +211,9 @@ async fn handle_client<S>(
         *started = Some(std::time::Instant::now());
     }
 
-    // ── Canal de mensagens para este cliente ────────────────────────────────
     let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
     { *state.message_tx.lock().await = Some(msg_tx.clone()); }
 
-    // ── Captura de input e detecção de borda ────────────────────────────────
     let peer_position = {
         let s = state.settings.lock().await;
         match s.peer_position {
@@ -239,7 +223,6 @@ async fn handle_client<S>(
             _                                    => PeerPosition::Right,
         }
     };
-    // Detectar resolução real do monitor (usa multi-monitor se disponível)
     let monitors = crate::screen::layout::detect_monitors();
     let primary = monitors.monitors.iter()
         .find(|m| m.is_primary)
@@ -254,50 +237,40 @@ async fn handle_client<S>(
         peer_position,
     };
 
-    // Resolução do servidor enviada ao cliente via SyncInfo (quando implementado)
-    // Por ora apenas loga as dimensões detectadas
     tracing::info!("Monitor local: {}x{} scale={:.1}", screen_w, screen_h, scale);
 
     let state_for_capture = state.clone();
     let msg_tx_for_capture = msg_tx.clone();
     let layout_clone = layout.clone();
 
-    // Iniciar captura de input
     let capture = std::sync::Arc::new(crate::input::platform::create_capture());
     let capture_ref_for_boundary = std::sync::Arc::clone(&capture);
 
-    // Unlock cursor quando LeaveScreen é recebido (cursor volta ao servidor)
-    // isso é feito dentro do loop principal abaixo
-
     let capture_result = capture.start(Box::new(move |event| {
-        // Verificar modo lock ANTES de qualquer lógica — lock impede transição de cursor
+        // lock_mode impede transição de cursor — verificar antes de qualquer lógica
         let locked = state_for_capture.lock_mode.load(std::sync::atomic::Ordering::Relaxed);
 
-        // Verificar se cursor cruzou a borda (apenas quando não há lock)
         if !locked {
             if let crate::input::InputEvent::MouseMove { x, y } = &event {
                 let px = x * layout_clone.local.width as f32;
                 let py = y * layout_clone.local.height as f32;
                 match check_boundary(px, py, &layout_clone) {
                     BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
-                        // Travar cursor fisicamente na borda
                         capture_ref_for_boundary.lock_cursor();
-                        // Atualizar estado para Remote atomicamente (AtomicBool) — C2 fix
                         state_for_capture.active_screen_remote
                             .store(true, std::sync::atomic::Ordering::Release);
-                        // Enviar EnterScreen + posição de entrada ao cliente
                         let _ = msg_tx_for_capture.try_send(Message::EnterScreen);
                         let _ = msg_tx_for_capture.try_send(Message::Input(
                             crate::input::InputEvent::MouseMove { x: entry_x, y: entry_y }
                         ));
-                        return; // não enviar o MouseMove original
+                        return;
                     }
                     BoundaryResult::Local => {}
                 }
             }
         }
 
-        // Verificar estado remoto via AtomicBool — lock-free, sem try_lock instável
+        // AtomicBool permite leitura lock-free no hot-path do callback
         let is_remote = !locked && state_for_capture.active_screen_remote
             .load(std::sync::atomic::Ordering::Acquire);
 
@@ -311,13 +284,11 @@ async fn handle_client<S>(
         warn!("Captura de input indisponível: {} — verifique permissão de Acessibilidade", e);
     }
 
-    // ── Receptor de arquivos ────────────────────────────────────────────────
     let mut file_receiver = match crate::transfer::FileReceiver::new().await {
         Ok(r) => Some(r),
         Err(e) => { tracing::warn!("FileReceiver indisponível: {}", e); None }
     };
 
-    // ── Loop principal: ler mensagens do cliente + enviar do canal ─────────
     let ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
     tokio::pin!(ping_interval);
     let mut ping_sent_at: Option<std::time::Instant> = None;
@@ -332,7 +303,6 @@ async fn handle_client<S>(
                 break;
             }
 
-            // Enviar mensagens do canal ao cliente
             Some(msg) = msg_rx.recv() => {
                 if let Err(e) = send_message(&mut stream, &msg).await {
                     warn!("Erro ao enviar mensagem para {}: {}", peer_addr, e);
@@ -340,7 +310,6 @@ async fn handle_client<S>(
                 }
             }
 
-            // Ping periódico para medir latência
             _ = ping_interval.tick() => {
                 ping_sent_at = Some(std::time::Instant::now());
                 if send_message(&mut stream, &Message::Ping).await.is_err() {
@@ -348,7 +317,6 @@ async fn handle_client<S>(
                 }
             }
 
-            // Receber mensagens do cliente
             result = recv_message(&mut stream) => {
                 match result {
                     Ok(Message::Pong) => {
@@ -361,9 +329,7 @@ async fn handle_client<S>(
                         }
                     }
                     Ok(Message::LeaveScreen) => {
-                        // Cursor voltou ao servidor — liberar travamento físico
                         capture.unlock_cursor();
-                        // Atualizar AtomicBool primeiro (hot-path do callback usa este)
                         state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Local;
@@ -372,11 +338,9 @@ async fn handle_client<S>(
                         info!("Cliente desconectou: {}", reason);
                         break;
                     }
-                    // Responder Pong ao Ping enviado pelo cliente (para ele medir latência)
                     Ok(Message::Ping) => {
                         let _ = send_message(&mut stream, &Message::Pong).await;
                     }
-                    // Message::Pong já tratado no arm acima (linha ~357) — não duplicar
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
                     }
@@ -422,7 +386,7 @@ async fn handle_client<S>(
         }
     }
 
-    capture.unlock_cursor(); // garantir que o cursor não fique preso ao desconectar
+    capture.unlock_cursor();
     capture.stop();
     { *state.message_tx.lock().await = None; }
     {
@@ -431,10 +395,10 @@ async fn handle_client<S>(
         let mut started = state.session_started_at.lock().await;
         *started = None;
     }
+    state.stats.reset();
     state.send_notification(
         "Movex — Desconectado",
         &format!("Sessão encerrada com {}", peer_hostname),
     ).await;
     info!("Conexão com {} encerrada", peer_addr);
 }
-

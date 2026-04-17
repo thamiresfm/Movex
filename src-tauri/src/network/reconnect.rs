@@ -15,15 +15,24 @@ impl Default for ReconnectPolicy {
 }
 
 impl ReconnectPolicy {
+    /// Número da tentativa atual (começa em 0)
     pub fn attempt(&self) -> u32 {
         self.attempt.load(Ordering::Relaxed)
     }
 
-    /// Retorna o delay para a próxima tentativa e incrementa o contador
+    /// Retorna (número_da_tentativa, delay) e incrementa o contador atomicamente.
+    /// Usar desta forma mantém `attempt()` sincronizado:
+    ///   let (attempt, delay) = policy.next_delay_with_attempt();
+    ///   info!("Tentativa {}: aguardando {:?}", attempt, delay);
+    pub fn next_delay_with_attempt(&self) -> (u32, Duration) {
+        let current = self.attempt.fetch_add(1, Ordering::Relaxed);
+        let secs = DELAYS_SECS.get(current as usize).copied().unwrap_or(30);
+        (current, Duration::from_secs(secs))
+    }
+
+    /// Retorna apenas o delay (preservado para compatibilidade interna)
     pub fn next_delay(&self) -> Duration {
-        let current = self.attempt.fetch_add(1, Ordering::Relaxed) as usize;
-        let secs = DELAYS_SECS.get(current).copied().unwrap_or(30);
-        Duration::from_secs(secs)
+        self.next_delay_with_attempt().1
     }
 
     pub fn reset(&self) {

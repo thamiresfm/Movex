@@ -1,5 +1,5 @@
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use std::collections::HashMap;
 
 const SERVICE_TYPE: &str = "_movex._tcp.local.";
@@ -58,9 +58,25 @@ fn discover_peers_blocking(timeout_secs: u64) -> Vec<DiscoveredPeer> {
                     peers.insert(peer.hostname.clone(), peer);
                 }
             }
-            Ok(_) | Err(_) => {}
+            Ok(ServiceEvent::ServiceRemoved(_, name)) => {
+                peers.remove(&name);
+            }
+            Ok(other) => {
+                debug!("mDNS: evento {:?}", other);
+            }
+            Err(recv_err) => {
+                let msg = format!("{:?}", recv_err);
+                if msg.contains("Timeout") || msg.contains("timeout") {
+                    // recv_timeout retorna Timeout normalmente a cada 100ms — não é erro
+                } else {
+                    warn!("mDNS canal fechado inesperadamente: {} — encerrando descoberta", msg);
+                    break;
+                }
+            }
         }
     }
-    let _ = mdns.stop_browse(SERVICE_TYPE);
+    if let Err(e) = mdns.stop_browse(SERVICE_TYPE) {
+        warn!("mDNS: falha ao parar browse: {}", e);
+    }
     peers.into_values().collect()
 }

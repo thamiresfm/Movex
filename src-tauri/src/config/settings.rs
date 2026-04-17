@@ -62,19 +62,26 @@ pub struct Settings {
     pub psk_hex: String,
     pub peer_position: ScreenPosition,
     pub autostart: bool,
-    pub theme: String,               // "dark" | "light"
+    pub theme: String,
     pub setup_complete: bool,
     pub notifications_enabled: bool,
-    pub lock_key: String,            // atalho para modo lock, ex: "ctrl+alt+l"
-    pub clipboard_sync_enabled: bool, // sincronizar clipboard entre máquinas
-    pub recent_peers: Vec<RecentPeer>, // histórico (max 10)
-    pub lock_mode: bool,             // modo lock ativo (não persistir como true)
+    /// Atalho global para ativar/desativar modo lock, ex: "ctrl+alt+l"
+    pub lock_key: String,
+    pub clipboard_sync_enabled: bool,
+    pub recent_peers: Vec<RecentPeer>,
+    /// Não persiste como `true` — sempre resetado no load
+    pub lock_mode: bool,
+    /// Fingerprint SHA-256 (hex) do certificado TLS do servidor — TOFU
+    /// None = primeira conexão (aceita qualquer cert e armazena)
+    /// Some(fp) = rejeita se o cert apresentado divergir
+    #[serde(default)]
+    pub server_cert_fingerprint: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             hostname: get_hostname(),
             role: Role::default(),
             server_addr: None,
@@ -89,15 +96,21 @@ impl Default for Settings {
             clipboard_sync_enabled: true,
             recent_peers: vec![],
             lock_mode: false,
+            server_cert_fingerprint: None,
         }
     }
 }
 
 fn get_hostname() -> String {
-    hostname::get()
+    let name = hostname::get()
         .unwrap_or_default()
         .to_string_lossy()
-        .to_string()
+        .to_string();
+    if name.trim().is_empty() {
+        "Movex-Device".to_string()
+    } else {
+        name
+    }
 }
 
 fn generate_psk() -> String {
@@ -119,7 +132,6 @@ impl Settings {
             match std::fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Settings>(&content) {
                     Ok(mut s) => {
-                        // Migrar schema v1 → v2
                         if s.schema_version < 2 {
                             s.schema_version = 2;
                             s.notifications_enabled = true;
@@ -127,13 +139,15 @@ impl Settings {
                             s.recent_peers = vec![];
                             s.lock_mode = false;
                         }
-                        // Migrar schema v2 → v3
                         if s.schema_version < 3 {
                             s.schema_version = 3;
                             s.clipboard_sync_enabled = true;
+                        }
+                        if s.schema_version < 4 {
+                            s.schema_version = 4;
+                            s.server_cert_fingerprint = None;
                             let _ = s.save();
                         }
-                        // Nunca persistir lock_mode = true ao carregar
                         s.lock_mode = false;
                         info!("Configurações carregadas de {:?}", path);
                         return s;
@@ -153,11 +167,10 @@ impl Settings {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        // Não persistir lock_mode
         let mut to_save = self.clone();
         to_save.lock_mode = false;
         let json = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
-        // Escrever em arquivo temporário + rename atômico para evitar corrupção
+        // Escrever em arquivo temporário e renomear atomicamente para evitar corrupção
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
@@ -171,17 +184,13 @@ impl Settings {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        // Remover entrada anterior do mesmo addr
         self.recent_peers.retain(|p| p.addr != addr);
-
         self.recent_peers.insert(0, RecentPeer {
             hostname: hostname.to_string(),
             addr: addr.to_string(),
             port,
             last_connected: now,
         });
-
-        // Manter só os 10 mais recentes
         self.recent_peers.truncate(10);
     }
 }
@@ -210,7 +219,7 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.port, original.port);
         assert_eq!(restored.psk_hex, original.psk_hex);
-        assert_eq!(restored.schema_version, 3);
+        assert_eq!(restored.schema_version, 4);
     }
 
     #[test]

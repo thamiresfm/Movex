@@ -15,16 +15,16 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────
-  # Testes Rust — roda em PRs e tags (~5 min, Linux gratuito)
-  # Não bloqueia os builds mesmo se falhar (continue-on-error)
+  # Lint + Testes Rust — roda em PRs e tags; bloqueia merge se falhar
   # ──────────────────────────────────────────────────────────────
   test:
-    name: Testes Rust
+    name: Lint e Testes Rust
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: actions/cache@v4
         with:
           path: |
@@ -41,7 +41,10 @@ jobs:
             libjavascriptcoregtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libssl-dev pkg-config \
             cmake nasm clang libdbus-1-dev
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
+      - name: Clippy (warnings como erros)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings 2>&1
+      - name: Testes unitários
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
 
   # ──────────────────────────────────────────────────────────────
   # Build macOS — apenas em tags v*

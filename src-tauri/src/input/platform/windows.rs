@@ -1,26 +1,30 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tracing::{error, info};
 
 use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
 
-// Callback global para os hooks Win32 (SetWindowsHookEx exige funções estáticas)
-// OnceLock garante inicialização thread-safe e acesso sem alocação por evento
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync + 'static>;
-static HOOK_CB: OnceLock<Mutex<Option<Arc<HookCallback>>>> = OnceLock::new();
 
-fn get_hook_cb() -> &'static Mutex<Option<Arc<HookCallback>>> {
-    HOOK_CB.get_or_init(|| Mutex::new(None))
+// RwLock permite leituras concorrentes no hot-path do hook (centenas de vezes/s)
+// e escritas exclusivas apenas durante init/shutdown.
+static HOOK_CB: OnceLock<std::sync::RwLock<Option<Arc<HookCallback>>>> = OnceLock::new();
+
+fn get_hook_cell() -> &'static std::sync::RwLock<Option<Arc<HookCallback>>> {
+    HOOK_CB.get_or_init(|| std::sync::RwLock::new(None))
 }
 
 fn set_hook_cb(cb: Option<Arc<HookCallback>>) {
-    *get_hook_cb().lock().unwrap() = cb;
+    if let Ok(mut w) = get_hook_cell().write() {
+        *w = cb;
+    }
 }
 
+/// Chamado centenas de vezes por segundo — usa read lock (não-exclusivo)
 fn call_hook_cb(event: InputEvent) {
-    if let Ok(guard) = get_hook_cb().lock() {
-        if let Some(cb) = guard.as_ref() {
+    if let Ok(r) = get_hook_cell().read() {
+        if let Some(cb) = r.as_ref() {
             cb(event);
         }
     }
@@ -104,7 +108,7 @@ impl InputCapture for WindowsCapture {
                     };
 
                     if let Some(ev) = event {
-                        call_hook_cb(ev); // usa static global em vez de thread_local
+                        call_hook_cb(ev);
                     }
                 }
                 CallNextHookEx(None, n_code, w_param, l_param)

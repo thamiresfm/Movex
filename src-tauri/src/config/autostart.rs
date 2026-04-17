@@ -57,46 +57,43 @@ fn disable_macos() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn enable_windows() -> Result<(), String> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::RegKey;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_str = exe.to_string_lossy();
+    let exe_str = exe.to_string_lossy().to_string();
 
-    // Usar reg.exe para escrever no Registry (disponível em todo Windows)
-    let output = std::process::Command::new("reg")
-        .args([
-            "add",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-            "/v", "Movex",
-            "/t", "REG_SZ",
-            "/d", &exe_str,
-            "/f",
-        ])
-        .output()
-        .map_err(|e| format!("Erro ao executar reg.exe: {}", e))?;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run_key = hkcu
+        .open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            KEY_SET_VALUE,
+        )
+        .map_err(|e| format!("Falha ao abrir chave de autostart: {}", e))?;
 
-    if output.status.success() {
-        info!("Autostart ativado (Windows Registry)");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Falha ao escrever no Registry: {}", stderr))
-    }
+    run_key
+        .set_value("Movex", &exe_str)
+        .map_err(|e| format!("Falha ao definir valor de autostart: {}", e))?;
+
+    info!("Autostart ativado (Windows Registry via winreg): {}", exe_str);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
 fn disable_windows() -> Result<(), String> {
-    let output = std::process::Command::new("reg")
-        .args([
-            "delete",
-            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-            "/v", "Movex",
-            "/f",
-        ])
-        .output()
-        .map_err(|e| format!("Erro ao executar reg.exe: {}", e))?;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::RegKey;
 
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run_key = hkcu
+        .open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            KEY_SET_VALUE,
+        )
+        .map_err(|e| format!("Falha ao abrir chave de autostart: {}", e))?;
+
+    // `delete_value` não retorna erro se o valor não existir
+    run_key.delete_value("Movex").unwrap_or_default();
     info!("Autostart desativado (Windows Registry)");
     Ok(())
 }

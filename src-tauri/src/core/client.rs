@@ -8,9 +8,157 @@ use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
-use crate::network::transport::{create_tls_connector, recv_message, send_message};
+use crate::network::transport::{create_tls_connector, recv_message, send_message, TofuVerifier};
 
-/// Conecta ao servidor com reconexão automática e suporte a cancelamento
+/// Conecta a um endereço específico (descoberto via mDNS) sem alterar settings persistidas.
+/// Não tenta reconectar — apenas uma tentativa.
+pub async fn connect_to_addr(
+    state: SharedState,
+    addr: String,
+    port: u16,
+    cancel: CancellationToken,
+) {
+    let target = format!("{}:{}", addr, port);
+    info!("Conectando (sessão) a {}...", target);
+    {
+        let mut status = state.connection_status.lock().await;
+        *status = ConnectionStatus::Connecting;
+    }
+
+    let tcp = tokio::select! {
+        _ = cancel.cancelled() => return,
+        r = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            TcpStream::connect(&target)
+        ) => match r {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => { warn!("Falha ao conectar em {}: {}", target, e); return; }
+            Err(_)     => { warn!("Timeout ao conectar em {}", target); return; }
+        }
+    };
+
+    let known_fp = state.settings.lock().await.server_cert_fingerprint.clone();
+    let (connector, tofu_verifier) = create_tls_connector(known_fp);
+    let domain = ServerName::try_from("movex.local").expect("domínio inválido");
+
+    let mut tls = match connector.connect(domain, tcp).await {
+        Ok(s) => s,
+        Err(e) => { warn!("Falha TLS ao conectar em {}: {}", target, e); return; }
+    };
+
+    if let Some(observed_fp) = tofu_verifier.take_observed() {
+        let mut settings = state.settings.lock().await;
+        if settings.server_cert_fingerprint.is_none() {
+            settings.server_cert_fingerprint = Some(observed_fp);
+            let _ = settings.save();
+        }
+    }
+
+    let (hostname, psk_hex) = {
+        let s = state.settings.lock().await;
+        (s.hostname.clone(), s.psk_hex.clone())
+    };
+
+    if let Ok(peer) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+        info!("Conectado (sessão) a: {}", peer);
+        {
+            let mut status = state.connection_status.lock().await;
+            *status = ConnectionStatus::Connected { peer_hostname: peer, latency_ms: 0 };
+            let mut started = state.session_started_at.lock().await;
+            *started = Some(std::time::Instant::now());
+        }
+        let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
+        { *state.message_tx.lock().await = Some(msg_tx); }
+        run_session(&mut tls, state.clone(), &mut msg_rx, cancel).await;
+        { *state.message_tx.lock().await = None; }
+    }
+
+    { *state.session_server_addr.lock().await = None; }
+}
+
+/// Executa o handshake HMAC com o servidor e retorna o hostname do peer.
+/// Retorna `Err` para qualquer falha — o chamador decide se reconecta ou não.
+async fn do_handshake<S>(
+    stream: &mut S,
+    hostname: &str,
+    psk_hex: &str,
+    state: &SharedState,
+    cancel: &CancellationToken,
+) -> Result<String, ()>
+where
+    S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin,
+{
+    let challenge = match recv_message(stream).await {
+        Ok(Message::ServerChallenge { version, server_nonce, .. }) => {
+            if version != PROTOCOL_VERSION {
+                warn!("Versão incompatível do servidor");
+                return Err(());
+            }
+            server_nonce
+        }
+        Ok(_) => { warn!("Esperava ServerChallenge"); return Err(()); }
+        Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); return Err(()); }
+    };
+
+    let hmac = crate::core::auth::compute_hmac(psk_hex, &challenge);
+    if let Err(e) = send_message(stream, &Message::Hello {
+        version: PROTOCOL_VERSION,
+        hostname: hostname.to_string(),
+        hmac,
+    }).await {
+        warn!("Erro ao enviar Hello: {}", e);
+        return Err(());
+    }
+
+    let first_msg = recv_message(stream).await;
+
+    let resolved = match first_msg {
+        Ok(Message::ConnectionPending { hostname: server_name }) => {
+            info!("Aguardando aprovação do servidor '{}'...", server_name);
+            {
+                let mut status = state.connection_status.lock().await;
+                *status = ConnectionStatus::Connecting;
+            }
+            if cancel.is_cancelled() { return Err(()); }
+            recv_message(stream).await
+        }
+        other => other,
+    };
+
+    match resolved {
+        Ok(Message::ConnectionRejected { reason }) => {
+            warn!("Conexão rejeitada pelo servidor: {}", reason);
+            {
+                let mut status = state.connection_status.lock().await;
+                *status = ConnectionStatus::Disconnected;
+            }
+            Err(())
+        }
+        Ok(Message::HelloAck { hostname: peer, .. }) => Ok(peer),
+        Ok(Message::ConnectionApproved) => {
+            info!("Conexão aprovada pelo servidor!");
+            match recv_message(stream).await {
+                Ok(Message::HelloAck { hostname: peer, .. }) => Ok(peer),
+                Ok(Message::HelloReject { reason }) => {
+                    warn!("Rejeitado após aprovação: {}", reason);
+                    Err(())
+                }
+                Ok(_) => { warn!("Esperava HelloAck após aprovação"); Err(()) }
+                Err(e) => { warn!("Erro ao receber HelloAck: {}", e); Err(()) }
+            }
+        }
+        Ok(other) => {
+            warn!("Mensagem inesperada durante handshake: {:?}", other);
+            Err(())
+        }
+        Err(e) => {
+            warn!("Erro durante handshake: {}", e);
+            Err(())
+        }
+    }
+}
+
+/// Conecta ao servidor com reconexão automática e suporte a cancelamento.
 pub async fn connect(state: SharedState, cancel: CancellationToken) {
     let policy = ReconnectPolicy::default();
 
@@ -43,107 +191,46 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
 
         match connect_result {
             Ok(Ok(tcp)) => {
-                let connector = create_tls_connector();
+                let known_fp = state.settings.lock().await.server_cert_fingerprint.clone();
+                let (connector, tofu_verifier) = create_tls_connector(known_fp);
                 let domain = ServerName::try_from("movex.local").expect("domínio inválido");
 
                 match connector.connect(domain, tcp).await {
                     Ok(mut tls) => {
+                        if let Some(observed_fp) = tofu_verifier.take_observed() {
+                            let mut settings = state.settings.lock().await;
+                            if settings.server_cert_fingerprint.is_none() {
+                                info!("TOFU: gravando fingerprint do servidor");
+                                settings.server_cert_fingerprint = Some(observed_fp);
+                                let _ = settings.save();
+                            }
+                        }
+
                         let (hostname, psk_hex) = {
                             let s = state.settings.lock().await;
                             (s.hostname.clone(), s.psk_hex.clone())
                         };
 
-                        // 1. Receber ServerChallenge com nonce
-                        let challenge = match recv_message(&mut tls).await {
-                            Ok(Message::ServerChallenge { version, server_nonce, .. }) => {
-                                if version != PROTOCOL_VERSION {
-                                    warn!("Versão incompatível do servidor");
-                                    continue;
-                                }
-                                server_nonce
-                            }
-                            Ok(_) => { warn!("Esperava ServerChallenge"); continue; }
-                            Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); continue; }
-                        };
-
-                        // 2. Computar HMAC(psk, server_nonce) e enviar Hello
-                        let hmac = crate::core::auth::compute_hmac(&psk_hex, &challenge);
-                        let hello = Message::Hello {
-                            version: PROTOCOL_VERSION,
-                            hostname,
-                            hmac,
-                        };
-
-                        if let Err(e) = send_message(&mut tls, &hello).await {
-                            warn!("Erro ao enviar Hello: {}", e);
-                            continue;
-                        }
-
-                        // Pode receber ConnectionPending antes do HelloAck
-                        let first_msg = recv_message(&mut tls).await;
-
-                        // Tratar ConnectionPending — aguardar aprovação
-                        let first_msg = match first_msg {
-                            Ok(Message::ConnectionPending { hostname: server_name }) => {
-                                info!("Aguardando aprovação do servidor '{}'...", server_name);
-                                {
-                                    let mut status = state.connection_status.lock().await;
-                                    *status = ConnectionStatus::Connecting;
-                                }
-                                // Aguardar próxima mensagem (aprovado ou rejeitado)
-                                recv_message(&mut tls).await
-                            }
-                            other => other,
-                        };
-
-                        match first_msg {
-                            Ok(Message::ConnectionRejected { reason }) => {
-                                warn!("Conexão rejeitada pelo servidor: {}", reason);
-                                {
-                                    let mut status = state.connection_status.lock().await;
-                                    *status = ConnectionStatus::Disconnected;
-                                }
-                                // Não tentar reconectar — foi rejeitado explicitamente
-                                return;
-                            }
-                            Ok(Message::ConnectionApproved) => {
-                                // Aprovado — agora vem o HelloAck
-                                info!("Conexão aprovada pelo servidor!");
-                            }
-                            // Pode ser que o servidor envie HelloAck diretamente (sem aprovação)
-                            _ => {
-                                // Tratar abaixo como HelloAck
-                            }
-                        }
-
-                        // Agora receber HelloAck
-                        match recv_message(&mut tls).await {
-                            Ok(Message::HelloAck { hostname: peer, .. }) => {
-                                info!("Conectado ao servidor: {}", peer);
+                        match do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+                            Ok(peer_hostname) => {
+                                info!("Conectado ao servidor: {}", peer_hostname);
                                 policy.reset();
                                 {
                                     let mut status = state.connection_status.lock().await;
                                     *status = ConnectionStatus::Connected {
-                                        peer_hostname: peer,
+                                        peer_hostname: peer_hostname.clone(),
                                         latency_ms: 0,
                                     };
                                     let mut started = state.session_started_at.lock().await;
                                     *started = Some(std::time::Instant::now());
                                 }
 
-                                // Canal para enviar mensagens ao servidor (ex: clipboard)
                                 let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
                                 { *state.message_tx.lock().await = Some(msg_tx); }
-
                                 run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
-
                                 { *state.message_tx.lock().await = None; }
                             }
-                            Ok(Message::HelloReject { reason }) => {
-                                warn!("Rejeitado pelo servidor: {}", reason);
-                            }
-                            Ok(_) => warn!("Resposta inesperada ao Hello"),
-                            Err(e) => warn!("Erro ao receber HelloAck: {}", e),
+                            Err(()) => {}
                         }
                     }
                     Err(e) => warn!("Falha no TLS handshake: {}", e),
@@ -153,21 +240,19 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             Err(_)     => warn!("Timeout ao conectar em {}", addr),
         }
 
-        // Verificar cancelamento antes de aguardar retry
         if cancel.is_cancelled() { return; }
 
-        let attempt = policy.attempt();
+        let (attempt, wait) = policy.next_delay_with_attempt();
         {
             let mut status = state.connection_status.lock().await;
             *status = ConnectionStatus::Reconnecting { attempt };
             let mut started = state.session_started_at.lock().await;
             *started = None;
         }
-        let wait = policy.next_delay();
-        info!("Reconectando em {}s...", wait.as_secs());
+        info!("Tentativa {}: reconectando em {}s...", attempt + 1, wait.as_secs());
 
         tokio::select! {
-            _ = cancel.cancelled() => { info!("Cliente cancelado durante espera de retry"); return; }
+            _ = cancel.cancelled() => { return; }
             _ = tokio::time::sleep(wait) => {}
         }
     }
@@ -183,7 +268,6 @@ async fn run_session<S>(
 {
     let mut last_clipboard: Option<String> = None;
     let mut clipboard_check = tokio::time::interval(std::time::Duration::from_millis(500));
-    // Ping periódico para medir latência no lado cliente
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(3));
     let mut ping_sent_at: Option<std::time::Instant> = None;
 
@@ -201,7 +285,6 @@ async fn run_session<S>(
                 break;
             }
 
-            // Enviar mensagens pendentes ao servidor (ex: clipboard)
             Some(msg) = msg_rx.recv() => {
                 if let Err(e) = send_message(stream, &msg).await {
                     warn!("Erro ao enviar para servidor: {}", e);
@@ -209,25 +292,21 @@ async fn run_session<S>(
                 }
             }
 
-            // Ping periódico para medir latência
             _ = ping_interval.tick() => {
                 ping_sent_at = Some(std::time::Instant::now());
                 if send_message(stream, &Message::Ping).await.is_err() { break; }
             }
 
-            // Verificar clipboard periodicamente — texto E imagens (se habilitado)
             _ = clipboard_check.tick() => {
-                // Ler flag sem lock pesado (settings é verificado fora do hot-path)
                 let sync_enabled = {
                     if let Ok(s) = state.settings.try_lock() {
                         s.clipboard_sync_enabled
                     } else {
-                        false // respeitar preferência do usuário na dúvida — não enviar
+                        false
                     }
                 };
                 if !sync_enabled { continue; }
                 if let Some(msg) = crate::clipboard::sync::create_clipboard_message() {
-                    // Hash CRC32 do conteúdo para detectar mudanças reais (não só tamanho)
                     let key = match &msg {
                         Message::ClipboardData { mime, data } => {
                             let hash = crate::core::utils::crc32(data);
@@ -235,15 +314,13 @@ async fn run_session<S>(
                         }
                         _ => continue,
                     };
-                    let changed = last_clipboard.as_ref().map_or(true, |prev| prev != &key);
-                    if changed {
+                    if last_clipboard.as_ref().map_or(true, |prev| prev != &key) {
                         last_clipboard = Some(key);
                         if send_message(stream, &msg).await.is_err() { break; }
                     }
                 }
             }
 
-            // Receber mensagens do servidor
             result = recv_message(stream) => {
                 match result {
                     Ok(Message::EnterScreen) => {
@@ -262,8 +339,8 @@ async fn run_session<S>(
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
-                        // Atualizar cache com CRC32 (igual ao que o remetente calcula)
-                        // Evita reenvio imediato após receber imagem (from_utf8 falhava para PNG)
+                        // Atualizar cache com hash do conteúdo recebido para evitar reenvio
+                        // imediato (dados binários como PNG não são comparáveis por texto)
                         if let Message::ClipboardData { ref mime, ref data } = *msg {
                             let hash = crate::core::utils::crc32(data);
                             last_clipboard = Some(format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash));
@@ -297,7 +374,6 @@ async fn run_session<S>(
                         let _ = send_message(stream, &Message::Pong).await;
                     }
                     Ok(Message::Pong) => {
-                        // Medir latência RTT no cliente
                         if let Some(sent) = ping_sent_at.take() {
                             let rtt = sent.elapsed().as_millis() as u32;
                             let mut status = state.connection_status.lock().await;
@@ -324,6 +400,7 @@ async fn run_session<S>(
     *status = ConnectionStatus::Disconnected;
     let mut started = state.session_started_at.lock().await;
     *started = None;
+    drop(status);
+    drop(started);
+    state.stats.reset();
 }
-
-
