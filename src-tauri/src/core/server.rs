@@ -13,6 +13,19 @@ use crate::network::transport::{
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
 
+/// Volta a aceitar clientes (após falha de handshake ou fim de sessão).
+async fn server_resume_listening(state: &SharedState) {
+    {
+        let mut st = state.connection_status.lock().await;
+        *st = ConnectionStatus::Listening;
+    }
+    {
+        let mut started = state.session_started_at.lock().await;
+        *started = None;
+    }
+    crate::emit_status_to_main(state).await;
+}
+
 /// Inicia o servidor Movex com cancelamento e envio de input ao cliente.
 pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), String> {
     let port = { state.settings.lock().await.port };
@@ -48,9 +61,8 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
             result = listener.accept() => {
                 match result {
                     Ok((tcp_stream, peer_addr)) => {
-                        // Verificar e reservar slot em um único lock para evitar race condition
                         {
-                            let mut status = state.connection_status.lock().await;
+                            let status = state.connection_status.lock().await;
                             if matches!(
                                 *status,
                                 ConnectionStatus::Connected { .. } | ConnectionStatus::PendingApproval { .. }
@@ -61,9 +73,6 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                                 );
                                 continue;
                             }
-                            *status = ConnectionStatus::PendingApproval {
-                                peer_hostname: peer_addr.to_string(),
-                            };
                         }
 
                         info!("Nova conexão TCP de {}", peer_addr);
@@ -74,6 +83,14 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                                 continue;
                             }
                         };
+
+                        {
+                            let mut status = state.connection_status.lock().await;
+                            *status = ConnectionStatus::PendingApproval {
+                                peer_hostname: peer_addr.to_string(),
+                            };
+                        }
+
                         let state_clone = state.clone();
                         let cancel_clone = cancel.clone();
                         tokio::spawn(async move {
@@ -108,12 +125,17 @@ async fn handle_client<S>(
         server_nonce: server_nonce.clone(),
     }).await {
         warn!("Erro ao enviar ServerChallenge para {}: {}", peer_addr, e);
+        server_resume_listening(&state).await;
         return;
     }
 
     let hello = match recv_message(&mut stream).await {
         Ok(m) => m,
-        Err(e) => { warn!("Erro ao receber Hello de {}: {}", peer_addr, e); return; }
+        Err(e) => {
+            warn!("Erro ao receber Hello de {}: {}", peer_addr, e);
+            server_resume_listening(&state).await;
+            return;
+        }
     };
 
     let peer_hostname = match hello {
@@ -122,6 +144,7 @@ async fn handle_client<S>(
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
                 }).await;
+                server_resume_listening(&state).await;
                 return;
             }
             let psk_hex = { state.settings.lock().await.psk_hex.clone() };
@@ -130,11 +153,16 @@ async fn handle_client<S>(
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: "Chave de segurança incorreta".to_string(),
                 }).await;
+                server_resume_listening(&state).await;
                 return;
             }
             hostname
         }
-        _ => { warn!("Esperava Hello de {}", peer_addr); return; }
+        _ => {
+            warn!("Esperava Hello de {}", peer_addr);
+            server_resume_listening(&state).await;
+            return;
+        }
     };
 
     let our_hostname = { state.settings.lock().await.hostname.clone() };
@@ -175,6 +203,7 @@ async fn handle_client<S>(
             let _ = send_message(&mut stream, &Message::ConnectionRejected {
                 reason: "Conexão recusada pelo usuário do servidor".to_string(),
             }).await;
+            server_resume_listening(&state).await;
             return;
         }
         _ => {
@@ -182,6 +211,7 @@ async fn handle_client<S>(
             let _ = send_message(&mut stream, &Message::ConnectionRejected {
                 reason: "Tempo de aprovação esgotado (60s)".to_string(),
             }).await;
+            server_resume_listening(&state).await;
             return;
         }
     }
@@ -210,6 +240,7 @@ async fn handle_client<S>(
         let mut started = state.session_started_at.lock().await;
         *started = Some(std::time::Instant::now());
     }
+    crate::emit_status_to_main(&state).await;
 
     let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
     { *state.message_tx.lock().await = Some(msg_tx.clone()); }
@@ -389,13 +420,8 @@ async fn handle_client<S>(
     capture.unlock_cursor();
     capture.stop();
     { *state.message_tx.lock().await = None; }
-    {
-        let mut status = state.connection_status.lock().await;
-        *status = ConnectionStatus::Disconnected;
-        let mut started = state.session_started_at.lock().await;
-        *started = None;
-    }
     state.stats.reset();
+    server_resume_listening(&state).await;
     state.send_notification(
         "Movex — Desconectado",
         &format!("Sessão encerrada com {}", peer_hostname),

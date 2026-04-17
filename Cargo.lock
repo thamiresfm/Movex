@@ -2512,6 +2512,7 @@ dependencies = [
  "hex",
  "hmac",
  "hostname",
+ "if-addrs",
  "image",
  "mdns-sd",
  "objc",

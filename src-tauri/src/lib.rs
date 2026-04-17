@@ -51,10 +51,7 @@ pub struct PeerInfo {
     pub port: u16,
 }
 
-// ── Comandos IPC ──────────────────────────────────────────────────────────────
-
-#[tauri::command]
-async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, String> {
+async fn build_status_payload(state: &SharedState) -> StatusPayload {
     let status = state.connection_status.lock().await.clone();
     let active = state.active_screen.lock().await.clone();
 
@@ -68,18 +65,39 @@ async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, Stri
         _ => (false, None, None),
     };
 
-    let uptime_secs = state.session_started_at.lock().await
+    let uptime_secs = state
+        .session_started_at
+        .lock()
+        .await
         .map(|t| t.elapsed().as_secs())
         .unwrap_or(0);
 
-    Ok(StatusPayload {
+    StatusPayload {
         connected,
         status_text: status.to_string(),
         peer_hostname,
         latency_ms,
         active_screen: format!("{:?}", active),
         uptime_secs,
-    })
+    }
+}
+
+/// Emite estado para todas as janelas (evita falha silenciosa se o label da janela não for `main`).
+pub(crate) async fn emit_status_to_main(state: &SharedState) {
+    use tauri::Emitter;
+    let app = { state.app_handle.lock().await.clone() };
+    let Some(app) = app else {
+        return;
+    };
+    let payload = build_status_payload(state).await;
+    let _ = app.emit("movex://status-changed", &payload);
+}
+
+// ── Comandos IPC ──────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, String> {
+    Ok(build_status_payload(&state).await)
 }
 
 #[tauri::command]
@@ -243,6 +261,12 @@ async fn discover_peers() -> Result<Vec<PeerInfo>, String> {
         addr: p.addr,
         port: p.port,
     }).collect())
+}
+
+/// IPv4 desta máquina na LAN (para exibir em “Conectar rede” / diagnóstico).
+#[tauri::command]
+fn get_local_ipv4_addrs() -> Vec<String> {
+    network::local_addrs::local_ipv4_strings()
 }
 
 /// Envia um arquivo ao peer conectado
@@ -877,6 +901,7 @@ pub fn run() {
             set_role,
             set_server_addr,
             discover_peers,
+            get_local_ipv4_addrs,
             connect_to_peer,
             send_file_to_peer,
             get_transfers,

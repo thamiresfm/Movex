@@ -4,6 +4,15 @@ use std::collections::HashMap;
 
 const SERVICE_TYPE: &str = "_movex._tcp.local.";
 
+/// Prefere IPv4 na LAN; evita mostrar só IPv6 (comum no Windows) quando há IPv4 disponível.
+fn pick_preferred_lan_address(addrs: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
+    addrs
+        .iter()
+        .copied()
+        .find(std::net::IpAddr::is_ipv4)
+        .or_else(|| addrs.first().copied())
+}
+
 #[derive(Debug, Clone)]
 pub struct DiscoveredPeer {
     pub hostname: String,
@@ -48,7 +57,9 @@ fn discover_peers_blocking(timeout_secs: u64) -> Vec<DiscoveredPeer> {
     while std::time::Instant::now() < deadline {
         match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(ServiceEvent::ServiceResolved(info)) => {
-                if let Some(addr) = info.get_addresses().iter().next() {
+                let addrs: Vec<std::net::IpAddr> =
+                    info.get_addresses().iter().copied().collect();
+                if let Some(addr) = pick_preferred_lan_address(&addrs) {
                     let peer = DiscoveredPeer {
                         hostname: info.get_hostname().trim_end_matches('.').to_string(),
                         addr: addr.to_string(),

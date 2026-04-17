@@ -3,3 +3,8 @@ target/
 dist/
 .DS_Store
 package-lock.json
+
+# Cópias locais de backup (não versionar)
+**/*.old.rs
+**/*.old.ts
+**/*.bak-*

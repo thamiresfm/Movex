@@ -90,7 +90,7 @@ fn detect_monitors_macos() -> MultiMonitorLayout {
     let displays = CGDisplay::active_displays().unwrap_or_default();
     let main_id = CGDisplay::main().id;
 
-    let mut monitors: Vec<Monitor> = displays.iter().enumerate().map(|(_i, &id)| {
+    let mut monitors: Vec<Monitor> = displays.iter().map(|&id| {
         let display = CGDisplay::new(id);
         let bounds = display.bounds();
         let scale = if bounds.size.width > 0.0 {

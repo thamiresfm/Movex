@@ -15,6 +15,16 @@ function esc(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/** Preenchido ao carregar o painel e ao “Atualizar” na rede — usado na grade Conectar. */
+let movexLocalIpv4Cache = '';
+
+function formatLocalNetworkLine(port: number, ipv4Csv: string): string {
+  if (ipv4Csv) {
+    return `${ipv4Csv} · porta ${port} · esta máquina`;
+  }
+  return `Porta ${port} · esta máquina (IPv4 não detectado)`;
+}
+
 interface StatusPayload {
   connected: boolean;
   status_text: string;
@@ -298,7 +308,7 @@ export async function renderDashboard(): Promise<void> {
                   <input type="password" id="keyInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text);outline:none;letter-spacing:2px;" />
                   <button id="btnToggleKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
                 </div>
-                <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Use a mesma chave nos dois computadores</div>
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Obrigatório: a chave deve ser <strong style="color:var(--text-2);">exatamente igual</strong> no servidor e no cliente (copie e cole). Chaves diferentes bloqueiam a conexão.</div>
               </div>
             </div>
 
@@ -544,6 +554,12 @@ export async function renderDashboard(): Promise<void> {
     try { cachedSettings = await invoke<any>('get_settings'); } catch { /* fora do Tauri */ }
   };
   await refreshSettings();
+  try {
+    const ips = await invoke<string[]>('get_local_ipv4_addrs');
+    movexLocalIpv4Cache = ips?.length ? ips.join(' · ') : '';
+  } catch {
+    movexLocalIpv4Cache = '';
+  }
 
   // ── Inicializar módulos com cleanup ────────────────────────────────────────
   await initScreenBorder();
@@ -1027,6 +1043,13 @@ export async function renderDashboard(): Promise<void> {
     addLog("Buscando dispositivos Movex na rede...", "info");
 
     try {
+      const ips = await invoke<string[]>('get_local_ipv4_addrs');
+      movexLocalIpv4Cache = ips?.length ? ips.join(' · ') : '';
+    } catch {
+      /* ignora */
+    }
+
+    try {
       const peers = await invoke<PeerInfo[]>('discover_peers');
       subtitle.textContent = `${peers.length} dispositivo(s) encontrado(s)`;
       addLog(`Descoberta concluída: ${peers.length} peer(s)`, peers.length > 0 ? 'sec' : 'info');
@@ -1160,11 +1183,16 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
   const grid = document.getElementById('deviceGrid');
   if (!grid) return;
 
+  const port = typeof (settings as { port?: number }).port === 'number'
+    ? (settings as { port: number }).port
+    : 24800;
+  const localIpText = formatLocalNetworkLine(port, movexLocalIpv4Cache);
+
   // Se conectado: sempre mostrar as máquinas reais (ignora descoberta anterior)
   if (status.connected) {
     grid.dataset.discovered = 'false'; // permite atualizar
     const devices = [
-      { name: settings.hostname, ip: 'Esta máquina · Local', icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+      { name: settings.hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
       {
         name: status.peer_hostname ?? 'Peer',
         ip: '● Conectado agora',
@@ -1174,7 +1202,8 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
         port: 0,
       },
     ];
-    grid.innerHTML = deviceCards(devices);
+    grid.innerHTML = '';
+    renderDeviceCards(grid, devices);
     const subtitle = document.getElementById('deviceSubtitle');
     if (subtitle) subtitle.textContent = `Conectado a ${status.peer_hostname ?? 'peer'}`;
     return;
@@ -1185,9 +1214,10 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
 
   // Mostrar apenas a máquina local enquanto desconectado
   const devices = [
-    { name: settings.hostname, ip: 'Esta máquina · Local', icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+    { name: settings.hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
   ];
-  grid.innerHTML = deviceCards(devices);
+  grid.innerHTML = '';
+  renderDeviceCards(grid, devices);
 }
 
 function renderDiscoveredDevices(peers: PeerInfo[]) {

@@ -10,6 +10,14 @@ use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
 use crate::network::transport::{create_tls_connector, recv_message, send_message};
 
+async fn connection_failed_client(state: &SharedState) {
+    {
+        let mut status = state.connection_status.lock().await;
+        *status = ConnectionStatus::Disconnected;
+    }
+    crate::emit_status_to_main(state).await;
+}
+
 /// Conecta a um endereço específico (descoberto via mDNS) sem alterar settings persistidas.
 /// Não tenta reconectar — apenas uma tentativa.
 pub async fn connect_to_addr(
@@ -26,14 +34,33 @@ pub async fn connect_to_addr(
     }
 
     let tcp = tokio::select! {
-        _ = cancel.cancelled() => return,
+        _ = cancel.cancelled() => {
+            connection_failed_client(&state).await;
+            return;
+        }
         r = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             TcpStream::connect(&target)
         ) => match r {
             Ok(Ok(s)) => s,
-            Ok(Err(e)) => { warn!("Falha ao conectar em {}: {}", target, e); return; }
-            Err(_)     => { warn!("Timeout ao conectar em {}", target); return; }
+            Ok(Err(e)) => {
+                warn!("Falha ao conectar em {}: {}", target, e);
+                state.send_notification(
+                    "Movex — Conexão",
+                    &format!("Não foi possível alcançar {}. Verifique IP, firewall (porta {}) e se o outro PC está em modo Servidor.", target, port),
+                ).await;
+                connection_failed_client(&state).await;
+                return;
+            }
+            Err(_) => {
+                warn!("Timeout ao conectar em {}", target);
+                state.send_notification(
+                    "Movex — Conexão",
+                    &format!("Tempo esgotado ao conectar a {}. Rede ou firewall podem estar bloqueando.", target),
+                ).await;
+                connection_failed_client(&state).await;
+                return;
+            }
         }
     };
 
@@ -43,7 +70,15 @@ pub async fn connect_to_addr(
 
     let mut tls = match connector.connect(domain, tcp).await {
         Ok(s) => s,
-        Err(e) => { warn!("Falha TLS ao conectar em {}: {}", target, e); return; }
+        Err(e) => {
+            warn!("Falha TLS ao conectar em {}: {}", target, e);
+            state.send_notification(
+                "Movex — TLS",
+                "Falha no handshake TLS. Se o servidor foi reinstalado, apague o arquivo de confiança: em Configurações use «Resetar» ou remova server_cert em ~/.movex nas duas máquinas.",
+            ).await;
+            connection_failed_client(&state).await;
+            return;
+        }
     };
 
     if let Some(observed_fp) = tofu_verifier.take_observed() {
@@ -59,18 +94,28 @@ pub async fn connect_to_addr(
         (s.hostname.clone(), s.psk_hex.clone())
     };
 
-    if let Ok(peer) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
-        info!("Conectado (sessão) a: {}", peer);
+    if let Ok(peer_hostname) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+        info!("Conectado (sessão) a: {}", peer_hostname);
         {
             let mut status = state.connection_status.lock().await;
-            *status = ConnectionStatus::Connected { peer_hostname: peer, latency_ms: 0 };
+            *status = ConnectionStatus::Connected {
+                peer_hostname: peer_hostname.clone(),
+                latency_ms: 0,
+            };
             let mut started = state.session_started_at.lock().await;
             *started = Some(std::time::Instant::now());
         }
+        crate::emit_status_to_main(&state).await;
         let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
         { *state.message_tx.lock().await = Some(msg_tx); }
         run_session(&mut tls, state.clone(), &mut msg_rx, cancel).await;
         { *state.message_tx.lock().await = None; }
+    } else {
+        state.send_notification(
+            "Movex — Conexão",
+            "Handshake falhou: confira se a chave de segurança (PSK) é a mesma no servidor e no cliente e se o servidor aprovou a conexão.",
+        ).await;
+        connection_failed_client(&state).await;
     }
 
     { *state.session_server_addr.lock().await = None; }
@@ -163,12 +208,31 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
     let policy = ReconnectPolicy::default();
 
     loop {
-        let (server_addr, port) = {
+        let (maybe_addr, port) = {
             let s = state.settings.lock().await;
             (
-                s.server_addr.clone().unwrap_or_else(|| "127.0.0.1".to_string()),
+                s.server_addr.as_ref().and_then(|a| {
+                    let t = a.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                }),
                 s.port,
             )
+        };
+
+        let Some(server_addr) = maybe_addr else {
+            warn!("Cliente sem IP do servidor — não use 127.0.0.1 implícito (defina nas opções ou conecte pelo cartão na rede)");
+            state
+                .send_notification(
+                    "Movex",
+                    "Defina o IP do servidor nas configurações ou toque num PC na lista (Rede → Atualizar).",
+                )
+                .await;
+            connection_failed_client(&state).await;
+            return;
         };
 
         let addr = format!("{}:{}", server_addr, port);
@@ -177,10 +241,12 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             let mut status = state.connection_status.lock().await;
             *status = ConnectionStatus::Connecting;
         }
+        crate::emit_status_to_main(&state).await;
 
         let connect_result = tokio::select! {
             _ = cancel.cancelled() => {
                 info!("Cliente Movex cancelado durante conexão");
+                connection_failed_client(&state).await;
                 return;
             }
             r = tokio::time::timeout(
@@ -211,7 +277,9 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             (s.hostname.clone(), s.psk_hex.clone())
                         };
 
-                        if let Ok(peer_hostname) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+                        if let Ok(peer_hostname) =
+                            do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await
+                        {
                             info!("Conectado ao servidor: {}", peer_hostname);
                             policy.reset();
                             {
@@ -223,21 +291,44 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                                 let mut started = state.session_started_at.lock().await;
                                 *started = Some(std::time::Instant::now());
                             }
+                            crate::emit_status_to_main(&state).await;
 
                             let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
                             { *state.message_tx.lock().await = Some(msg_tx); }
                             run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
                             { *state.message_tx.lock().await = None; }
+                        } else {
+                            warn!("Handshake falhou — verifique PSK idêntica ou aprovação no servidor");
+                            state
+                                .send_notification(
+                                    "Movex",
+                                    "Falha na autenticação: mesma chave nos dois PCs? Servidor aprovou?",
+                                )
+                                .await;
+                            connection_failed_client(&state).await;
+                            return;
                         }
                     }
-                    Err(e) => warn!("Falha no TLS handshake: {}", e),
+                    Err(e) => {
+                        warn!("Falha no TLS handshake: {}", e);
+                        crate::emit_status_to_main(&state).await;
+                    }
                 }
             }
-            Ok(Err(e)) => warn!("Falha ao conectar em {}: {}", addr, e),
-            Err(_)     => warn!("Timeout ao conectar em {}", addr),
+            Ok(Err(e)) => {
+                warn!("Falha ao conectar em {}: {}", addr, e);
+                crate::emit_status_to_main(&state).await;
+            }
+            Err(_) => {
+                warn!("Timeout ao conectar em {}", addr);
+                crate::emit_status_to_main(&state).await;
+            }
         }
 
-        if cancel.is_cancelled() { return; }
+        if cancel.is_cancelled() {
+            connection_failed_client(&state).await;
+            return;
+        }
 
         let (attempt, wait) = policy.next_delay_with_attempt();
         {
@@ -246,10 +337,14 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             let mut started = state.session_started_at.lock().await;
             *started = None;
         }
+        crate::emit_status_to_main(&state).await;
         info!("Tentativa {}: reconectando em {}s...", attempt + 1, wait.as_secs());
 
         tokio::select! {
-            _ = cancel.cancelled() => { return; }
+            _ = cancel.cancelled() => {
+                connection_failed_client(&state).await;
+                return;
+            }
             _ = tokio::time::sleep(wait) => {}
         }
     }
@@ -400,4 +495,5 @@ async fn run_session<S>(
     drop(status);
     drop(started);
     state.stats.reset();
+    crate::emit_status_to_main(&state).await;
 }

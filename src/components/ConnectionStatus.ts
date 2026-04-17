@@ -33,21 +33,18 @@ export function cleanupStatusHandlers(): void {
  * Retorna função de cleanup.
  */
 export async function initStatusListener(): Promise<() => void> {
-  let eventWorking = false;
   let pollId: ReturnType<typeof setInterval> | null = null;
 
-  // Polling de fallback — só dispara se o evento Tauri não estiver funcionando
+  // Polling constante: garante UI alinhada ao backend mesmo se o evento Tauri falhar
   pollId = setInterval(async () => {
-    if (eventWorking) return; // evento ativo, não duplicar
     try {
       const status = await invoke<StatusPayload>('get_status');
       handlers.forEach(h => h(status));
     } catch { /* fora do Tauri */ }
-  }, 3000);
+  }, 2000);
 
-  // Evento Tauri nativo (prioridade)
+  // Evento em tempo real quando o Rust emite (complementa o polling)
   await onEvent<StatusPayload>('movex://status-changed', (status) => {
-    eventWorking = true;
     handlers.forEach(h => h(status));
   });
 
