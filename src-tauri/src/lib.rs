@@ -619,9 +619,12 @@ async fn set_screen_border(
         return Err(format!("Cor CSS inválida: '{}'", color));
     }
     // Emitir evento para o frontend — elimina necessidade de eval() e unsafe-inline na CSP
-    use tauri::Emitter;
-    app.emit("movex://screen-border", serde_json::json!({ "active": active, "color": color }))
-        .map_err(|e| e.to_string())?;
+    use tauri::{Emitter, Manager};
+    // Emitir apenas para a janela principal (não afeta futuras janelas)
+    if let Some(win) = app.get_webview_window("main") {
+        win.emit("movex://screen-border", serde_json::json!({ "active": active, "color": color }))
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 /**
- * ConnectionStatus — substitui polling de status por eventos Tauri nativos.
- * O backend emite 'movex://status-changed' ao mudar de estado.
+ * ConnectionStatus — escuta eventos Tauri + polling de fallback.
+ * Retorna funções de cleanup para evitar vazamentos.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { onEvent } from '../utils/tauri-events';
@@ -18,40 +18,56 @@ export interface StatusPayload {
 type StatusHandler = (status: StatusPayload) => void;
 const handlers: StatusHandler[] = [];
 
-/** Registra callback que será chamado em mudanças de status */
 export function onStatusChange(handler: StatusHandler): void {
   handlers.push(handler);
 }
 
-/** Inicializa escuta de eventos de status (substitui polling) */
-export async function initStatusListener(): Promise<void> {
-  // Escutar evento Tauri nativo
-  await onEvent<StatusPayload>('movex://status-changed', (status) => {
-    handlers.forEach(h => h(status));
-  });
+/**
+ * Inicializa escuta de eventos de status.
+ * Usa evento Tauri quando disponível; cai para polling como fallback.
+ * Retorna função de cleanup.
+ */
+export async function initStatusListener(): Promise<() => void> {
+  let eventWorking = false;
+  let pollId: ReturnType<typeof setInterval> | null = null;
 
-  // Fallback: polling a 3s para compatibilidade (reduzido de chamada constante)
-  setInterval(async () => {
+  // Polling de fallback — só dispara se o evento Tauri não estiver funcionando
+  pollId = setInterval(async () => {
+    if (eventWorking) return; // evento ativo, não duplicar
     try {
       const status = await invoke<StatusPayload>('get_status');
       handlers.forEach(h => h(status));
     } catch { /* fora do Tauri */ }
   }, 3000);
 
+  // Evento Tauri nativo (prioridade)
+  await onEvent<StatusPayload>('movex://status-changed', (status) => {
+    eventWorking = true;
+    handlers.forEach(h => h(status));
+  });
+
   // Carregar estado inicial
   try {
     const status = await invoke<StatusPayload>('get_status');
     handlers.forEach(h => h(status));
   } catch { /* fora do Tauri */ }
+
+  // Retornar cleanup
+  return () => {
+    if (pollId !== null) clearInterval(pollId);
+  };
 }
 
-/** Obtém aprovação pendente via polling leve (500ms) */
+/**
+ * Polling de aprovação de conexão pendente.
+ * Retorna função de cleanup para o setInterval.
+ */
 export function startApprovalPolling(
   onPending: (hostname: string) => void,
   onCleared: () => void,
-): void {
+): () => void {
   let lastPending: string | null = null;
-  setInterval(async () => {
+  const id = setInterval(async () => {
     try {
       const pending = await invoke<string | null>('get_pending_approval');
       if (pending && pending !== lastPending) {
@@ -64,4 +80,5 @@ export function startApprovalPolling(
       }
     } catch { /* fora do Tauri */ }
   }, 500);
+  return () => clearInterval(id);
 }

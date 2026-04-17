@@ -487,15 +487,35 @@ export async function renderDashboard(): Promise<void> {
 
   // Polling de aprovação movido para ConnectionStatus.startApprovalPolling — chamado abaixo
 
-  // ── Inicializar módulos separados ─────────────────────────────────────────
-  await initScreenBorder();        // borda luminosa via evento Tauri (sem eval)
-  await initFileTransfer();        // drag-and-drop com cleanup correto
-  await initStatusListener();      // status via evento + polling fallback
+  // ── Cache de settings (raramente muda — evitar invoke por evento de status) ──
+  let cachedSettings: any = null;
+  const refreshSettings = async () => {
+    try { cachedSettings = await invoke<any>('get_settings'); } catch { /* fora do Tauri */ }
+  };
+  await refreshSettings();
+
+  // ── Inicializar módulos com cleanup ────────────────────────────────────────
+  await initScreenBorder();
+  await initFileTransfer();
+  const stopStatusPolling   = await initStatusListener();
+  const stopApprovalPolling = startApprovalPolling(
+    (hostname) => showApprovalModal(hostname),
+    ()         => hideApprovalModal(),
+  );
+
+  // Expor cleanup global (usado no reset de configurações)
+  (window as any).__movexCleanup = () => {
+    stopStatusPolling();
+    stopApprovalPolling();
+    cleanupFileTransfer();
+    cleanupAllListeners();
+  };
 
   // Delegar status updates para o módulo ConnectionStatus
   onStatusChange(async (status) => {
+    const settings = cachedSettings;
+    if (!settings) return; // ainda carregando
     try {
-      const settings = await invoke<any>('get_settings');
       updateScreenMap(settings, status);
       const latEl = document.getElementById('latencyVal');
       if (latEl) {
@@ -562,11 +582,12 @@ export async function renderDashboard(): Promise<void> {
     } catch { /* fora do Tauri */ }
   });
 
-  // Polling de aprovação via módulo dedicado
-  startApprovalPolling(
-    (hostname) => showApprovalModal(hostname),
-    () => hideApprovalModal(),
-  );
+  // Atualizar cache de settings após salvar configurações
+  const origSaveConfig = (window as any).saveConfig;
+  (window as any).saveConfig = async (...args: any[]) => {
+    await origSaveConfig?.(...args);
+    await refreshSettings(); // invalidar cache após salvar
+  };
 
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
@@ -669,6 +690,8 @@ export async function renderDashboard(): Promise<void> {
     try {
       await invoke('reset_settings');
       addLog("Configurações resetadas. Reiniciando...", "warn");
+      // Limpar todos os listeners antes de recarregar
+      (window as any).__movexCleanup?.();
       setTimeout(() => window.location.reload(), 800);
     } catch(e) {
       addLog(`Erro ao resetar: ${e}`, 'warn');
@@ -754,7 +777,9 @@ export async function renderDashboard(): Promise<void> {
   (window as any).installUpdate = async () => {
     addLog('Baixando e instalando atualização...', 'sec');
     document.getElementById('updateBanner')?.remove();
-    await invoke('install_update').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+    const result = await invoke<string>('install_update')
+      .catch((e: unknown) => { addLog(`Erro na atualização: ${e}`, 'warn'); return null; });
+    if (result) addLog(`✓ ${result}`, 'sec');
   };
 
   // ── Transferência de arquivos ───────────────────────────────────────────────

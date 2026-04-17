@@ -1,70 +1,86 @@
 /**
- * FileTransfer — gerencia drag-and-drop e progresso de transferência de arquivos.
- * Cleanup de listeners incluído.
+ * FileTransfer — gerencia drag-and-drop com cleanup completo de todos os listeners.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { addLog } from './Logs';
-import { cleanupAllListeners } from '../utils/tauri-events';
 
 let dragListenersAdded = false;
 let tauriUnlisten: (() => void) | null = null;
 
-/** Inicializa drag-and-drop com cleanup correto */
+// Rastrear listeners HTML5 para remoção correta no cleanup
+type DragHandler = { type: string; fn: EventListenerOrEventListenerObject };
+const dragHandlers: DragHandler[] = [];
+
+function addDragListener(type: string, fn: EventListenerOrEventListenerObject) {
+  document.addEventListener(type, fn);
+  dragHandlers.push({ type, fn });
+}
+
 export async function initFileTransfer(): Promise<void> {
   if (dragListenersAdded) return;
   dragListenersAdded = true;
 
-  // Criar overlay de drop
-  const overlay = document.createElement('div');
-  overlay.id = 'dropOverlay';
-  Object.assign(overlay.style, {
-    display:        'none',
-    position:       'fixed',
-    inset:          '0',
-    zIndex:         '9998',
-    background:     'rgba(0,212,255,.08)',
-    border:         '3px dashed var(--cyan)',
-    alignItems:     'center',
-    justifyContent: 'center',
-    pointerEvents:  'none',
-  });
-  overlay.innerHTML = `
-    <div style="text-align:center;color:var(--cyan);">
-      <div style="font-size:48px;margin-bottom:12px;">📁</div>
-      <div style="font-size:18px;font-weight:700;">Soltar para transferir ao peer</div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
+  // Overlay de drop
+  const existing = document.getElementById('dropOverlay');
+  if (!existing) {
+    const overlay = document.createElement('div');
+    overlay.id = 'dropOverlay';
+    Object.assign(overlay.style, {
+      display:        'none',
+      position:       'fixed',
+      inset:          '0',
+      zIndex:         '9998',
+      background:     'rgba(0,212,255,.08)',
+      border:         '3px dashed var(--cyan)',
+      alignItems:     'center',
+      justifyContent: 'center',
+      pointerEvents:  'none',
+    });
+    overlay.innerHTML = `
+      <div style="text-align:center;color:var(--cyan);">
+        <div style="font-size:48px;margin-bottom:12px;">📁</div>
+        <div style="font-size:18px;font-weight:700;">Soltar para transferir ao peer</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  }
 
-  // Handlers HTML5 drag
-  document.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    overlay.style.display = 'flex';
-  });
+  const getOverlay = () => document.getElementById('dropOverlay');
 
-  document.addEventListener('dragleave', (e) => {
-    // relatedTarget === null = cursor saiu da janela
-    if (e.relatedTarget === null) {
-      overlay.style.display = 'none';
+  const onDragOver = (e: Event) => {
+    (e as DragEvent).preventDefault();
+    const o = getOverlay();
+    if (o) o.style.display = 'flex';
+  };
+
+  const onDragLeave = (e: Event) => {
+    if ((e as DragEvent).relatedTarget === null) {
+      const o = getOverlay();
+      if (o) o.style.display = 'none';
     }
-  });
+  };
 
-  document.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    overlay.style.display = 'none';
-    const files = Array.from(e.dataTransfer?.files ?? []);
+  const onDrop = async (e: Event) => {
+    (e as DragEvent).preventDefault();
+    const o = getOverlay();
+    if (o) o.style.display = 'none';
+    const files = Array.from((e as DragEvent).dataTransfer?.files ?? []);
     const paths = files.map(f => (f as any).path ?? '').filter(Boolean);
     if (paths.length) await sendFiles(paths);
-  });
+  };
 
-  // Tauri drag-and-drop nativo (com cleanup)
+  addDragListener('dragover',   onDragOver);
+  addDragListener('dragleave',  onDragLeave);
+  addDragListener('drop',       onDrop);
+
+  // Tauri drag-and-drop nativo (com cleanup correto)
   try {
     const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
     const webview = getCurrentWebviewWindow();
-    // Remover listener anterior se existir
-    tauriUnlisten?.();
+    tauriUnlisten?.(); // remover listener anterior se existir
     tauriUnlisten = await webview.onDragDropEvent(async (event) => {
-      overlay.style.display = 'none';
+      const o = getOverlay();
+      if (o) o.style.display = 'none';
       if (event.payload.type === 'drop') {
         const paths = event.payload.paths ?? [];
         if (paths.length) await sendFiles(paths);
@@ -73,10 +89,13 @@ export async function initFileTransfer(): Promise<void> {
   } catch { /* API não disponível */ }
 }
 
-/** Remove todos os listeners de drag-and-drop */
+/** Remove todos os listeners de drag-and-drop (HTML5 + Tauri) */
 export function cleanupFileTransfer(): void {
   tauriUnlisten?.();
   tauriUnlisten = null;
+  // Remover listeners HTML5 rastreados
+  dragHandlers.forEach(({ type, fn }) => document.removeEventListener(type, fn));
+  dragHandlers.length = 0;
   dragListenersAdded = false;
 }
 
