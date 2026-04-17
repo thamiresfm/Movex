@@ -465,26 +465,31 @@ export async function renderDashboard(): Promise<void> {
   `;
   document.body.insertAdjacentHTML('beforeend', approvalModalHtml);
 
-  // ── Registrar TODOS os eventos via addEventListener (sem onclick inline) ────
-  // Necessário porque o CSP do Tauri bloqueia event handlers inline em HTML.
+  // ── Sistema de navegação local (sem window.navTo) ───────────────────────────
+  const navTo = (page: string) => {
+    document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.getElementById(`page-${page}`)?.classList.add('active');
+    document.getElementById(`nav-${page}`)?.classList.add('active');
+    const titles: Record<string, string> = {
+      painel: 'Painel Principal',
+      dispositivos: 'Dispositivos',
+      seguranca: 'Logs de Segurança · Interface de Diagnóstico',
+      configuracoes: 'Segurança & Conexão',
+    };
+    const titleEl = document.getElementById('pageTitle');
+    if (titleEl) titleEl.textContent = titles[page] ?? page;
+    // Carregar dados da aba ao navegar
+    if (page === 'configuracoes') {
+      loadRecentPeers?.();
+      updateLockButton?.();
+      updateThemeButtons?.();
+    }
+  };
 
   // Navegação da sidebar
   document.querySelectorAll('.nav-item[data-nav]').forEach(el => {
-    el.addEventListener('click', () => {
-      const page = (el as HTMLElement).dataset.nav!;
-      document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
-      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-      document.getElementById(`page-${page}`)?.classList.add('active');
-      el.classList.add('active');
-      const titles: Record<string, string> = {
-        painel: 'Painel Principal',
-        dispositivos: 'Dispositivos',
-        seguranca: 'Logs de Segurança · Interface de Diagnóstico',
-        configuracoes: 'Segurança & Conexão',
-      };
-      const titleEl = document.getElementById('pageTitle');
-      if (titleEl) titleEl.textContent = titles[page] ?? page;
-    });
+    el.addEventListener('click', () => navTo((el as HTMLElement).dataset.nav!));
   });
 
   let approvalCountdownTimer: ReturnType<typeof setInterval> | null = null;
@@ -519,13 +524,13 @@ export async function renderDashboard(): Promise<void> {
     if (approvalCountdownTimer) { clearInterval(approvalCountdownTimer); approvalCountdownTimer = null; }
   };
 
-  (window as any).approveConn = async () => {
+  const approveConn = async () => {
     hideApprovalModal();
     await invoke('approve_connection').catch(console.warn);
     addLog('Conexão aprovada ✓', 'sec');
   };
 
-  (window as any).rejectConn = async () => {
+  const rejectConn = async () => {
     hideApprovalModal();
     await invoke('reject_connection').catch(console.warn);
     addLog('Conexão recusada ✕', 'warn');
@@ -652,12 +657,10 @@ export async function renderDashboard(): Promise<void> {
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
 
-  // navTo já registrado antes dos awaits — apenas registrar handlers restantes
-  (window as any).clearLogs = clearLogs;
-  (window as any).copyLogs = () => navigator.clipboard.writeText(document.getElementById('logBody')?.innerText ?? '');
-  (window as any).toggleKey = () => {
+  const copyLogs = () => navigator.clipboard.writeText(document.getElementById('logBody')?.innerText ?? '');
+  const toggleKey = () => {
     const inp = document.getElementById('keyInput') as HTMLInputElement;
-    inp.type = inp.type === 'password' ? 'text' : 'password';
+    if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
   };
   // ── Configurações ──────────────────────────────────────────────────────────
 
@@ -704,9 +707,7 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
-  (window as any).loadCurrentSettings = loadCurrentSettings;
-
-  (window as any).selectRoleCard = async (role: string) => {
+  const selectRoleCard = async (role: string) => {
     currentRole = role;
     applyRoleUI(role);
     // switch_role cancela conexão ativa, salva e relança automaticamente
@@ -714,36 +715,36 @@ export async function renderDashboard(): Promise<void> {
     addLog(`Papel alterado para: ${role === 'server' ? 'Servidor' : 'Cliente'} (reconectando...)`, 'sec');
   };
 
-  (window as any).applyServerAddr = async () => {
+  const applyServerAddr = async () => {
     const input = document.getElementById('serverAddrInput') as HTMLInputElement;
     const addr = input?.value.trim() || null;
     await invoke('set_server_addr', { addr }).catch(console.warn);
     addLog(`Endereço do servidor: ${addr ?? '(removido)'}`, 'info');
   };
 
-  (window as any).confirmReset = () => {
+  const confirmReset = () => {
     const modal = document.getElementById('resetModal')!;
-    modal.style.display = 'flex';
+    if (modal) modal.style.display = 'flex';
   };
 
-  (window as any).closeResetModal = () => {
+  const closeResetModal = () => {
     const modal = document.getElementById('resetModal')!;
-    modal.style.display = 'none';
+    if (modal) modal.style.display = 'none';
   };
 
-  (window as any).doReset = async () => {
+  const doReset = async () => {
     try {
       await invoke('reset_settings');
       addLog("Configurações resetadas. Reiniciando...", "warn");
       // Limpar todos os listeners antes de recarregar
-      (window as any).__movexCleanup?.();
+      (window as any).__movexCleanup?.(); // limpar listeners registrados em módulos externos
       setTimeout(() => window.location.reload(), 800);
     } catch(e) {
       addLog(`Erro ao resetar: ${e}`, 'warn');
     }
   };
 
-  (window as any).saveConfig = async () => {
+  const saveConfig = async () => {
     const port = parseInt((document.getElementById('portInput') as HTMLInputElement).value) || 24800;
     // Ler chave do campo da UI (usuário pode ter alterado)
     const keyVal = (document.getElementById('keyInput') as HTMLInputElement)?.value.trim();
@@ -764,14 +765,10 @@ export async function renderDashboard(): Promise<void> {
       addLog(`Erro ao salvar: ${e}`, 'warn');
     }
   };
-  // Invalidar cache APÓS definição real do saveConfig
-  {
-    const realSave = (window as any).saveConfig;
-    (window as any).saveConfig = async (...args: any[]) => {
-      await realSave?.(...args);
-      await refreshSettings();
-    };
-  }
+  const saveConfigAndRefresh = async () => {
+    await saveConfig();
+    await refreshSettings();
+  };
 
   // Carregar configurações atuais ao abrir a página
   await loadCurrentSettings();
@@ -779,8 +776,7 @@ export async function renderDashboard(): Promise<void> {
   document.getElementById('btnConnect')?.addEventListener('click', async () => {
     addLog("Iniciando conexão...", "info");
     await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
-    const navEl = document.getElementById('nav-painel');
-    if (navEl) (window as any).navTo('painel', navEl);
+    navTo('painel');
   });
 
   // Drag-and-drop, borda luminosa e status → módulos FileTransfer, ScreenBorder, ConnectionStatus
@@ -816,12 +812,12 @@ export async function renderDashboard(): Promise<void> {
     installBtn.className = 'btn btn-cyan';
     installBtn.style.cssText = 'white-space:nowrap;font-size:11px;';
     installBtn.textContent = 'Instalar';
-    installBtn.onclick = () => (window as any).installUpdate();
+    installBtn.addEventListener('click', installUpdate);
 
     const closeBtn = document.createElement('button');
     closeBtn.style.cssText = 'background:none;border:none;color:var(--text-3);cursor:pointer;font-size:16px;';
     closeBtn.textContent = '✕';
-    closeBtn.onclick = () => banner.remove();
+    closeBtn.addEventListener('click', () => banner.remove());
 
     banner.appendChild(info);
     banner.appendChild(installBtn);
@@ -829,7 +825,7 @@ export async function renderDashboard(): Promise<void> {
     document.body.appendChild(banner);
   };
 
-  (window as any).installUpdate = async () => {
+  const installUpdate = async () => {
     addLog('Baixando e instalando atualização...', 'sec');
     document.getElementById('updateBanner')?.remove();
     const result = await invoke<string>('install_update')
@@ -838,7 +834,7 @@ export async function renderDashboard(): Promise<void> {
   };
 
   // ── Transferência de arquivos ───────────────────────────────────────────────
-  (window as any).sendFileDialog = async () => {
+  const sendFileDialog = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({
@@ -855,13 +851,13 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
-  (window as any).doDisconnect = async () => {
+  const doDisconnect = async () => {
     await invoke('disconnect').catch(console.warn);
     addLog('Desconectado.', 'info');
   };
 
   // ── Posicionamento do peer no mapa de telas ────────────────────────────────
-  (window as any).setPeerPosition = async (position: string) => {
+  const setPeerPosition = async (position: string) => {
     if (!cachedSettings) {
       addLog('Configurações ainda carregando — tente novamente em instantes.', 'warn');
       return;
@@ -900,7 +896,7 @@ export async function renderDashboard(): Promise<void> {
   }
 
   // ── Tema claro/escuro ──────────────────────────────────────────────────────
-  (window as any).setTheme = async (theme: string) => {
+  const setTheme = async (theme: string) => {
     const { applyTheme } = await import('../main');
     applyTheme(theme);
     const dark = document.getElementById('themeDark')!;
@@ -919,7 +915,7 @@ export async function renderDashboard(): Promise<void> {
   };
 
   // ── Modo Lock ──────────────────────────────────────────────────────────────
-  (window as any).toggleLockMode = async () => {
+  const toggleLockMode = async () => {
     const active = await invoke<boolean>('toggle_lock').catch(() => false);
     const btn = document.getElementById('btnLockMode')!;
     btn.textContent = active ? '🔒 Bloqueado' : '🔓 Desbloqueado';
@@ -950,7 +946,7 @@ export async function renderDashboard(): Promise<void> {
         // Capturar addr e port sem interpolação de string em onclick
         const addr = p.addr as string;
         const port = Number(p.port);
-        row.addEventListener('click', () => (window as any).connectToPeer?.(addr, port));
+        row.addEventListener('click', () => connectToPeer(addr, port));
 
         const left = document.createElement('div');
         const nameEl = document.createElement('div');
@@ -980,22 +976,12 @@ export async function renderDashboard(): Promise<void> {
     } catch { /* fora do Tauri */ }
   };
 
-  (window as any).clearHistory = async () => {
+  const clearHistory = async () => {
     await invoke('clear_recent_peers').catch(console.warn);
     loadRecentPeers();
     addLog('Histórico de conexões limpo.', 'info');
   };
 
-  // Carregar peers recentes ao abrir configurações
-  const origNavTo = (window as any).navTo;
-  (window as any).navTo = (page: string, el: HTMLElement) => {
-    origNavTo?.(page, el);
-    if (page === 'configuracoes') {
-      loadRecentPeers();
-      updateLockButton();
-      updateThemeButtons();
-    }
-  };
 
   const updateLockButton = async () => {
     try {
@@ -1033,7 +1019,7 @@ export async function renderDashboard(): Promise<void> {
   };
 
   // ── Descoberta mDNS ────────────────────────────────────────────────────────
-  (window as any).refreshDevices = async () => {
+  const refreshDevices = async () => {
     const btn = document.getElementById('btnRefreshDevices') as HTMLButtonElement;
     const subtitle = document.getElementById('deviceSubtitle')!;
     if (btn) { btn.disabled = true; btn.textContent = '⟳ Buscando...'; }
@@ -1053,39 +1039,33 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
-  (window as any).addManualDevice = () => {
+  const addManualDevice = () => {
     const modal = document.getElementById('manualModal')!;
     modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
   };
 
-  const goToPainel = () => {
-    const navEl = document.getElementById('nav-painel');
-    if (navEl) (window as any).navTo('painel', navEl);
-  };
+  const goToPainel = () => navTo('painel');
 
-  (window as any).connectManual = async () => {
+  const connectManual = async () => {
     const ip   = (document.getElementById('manualIp') as HTMLInputElement).value.trim();
     const port = parseInt((document.getElementById('manualPort') as HTMLInputElement).value) || 24800;
     if (!ip) { addLog("Digite um endereço IP", 'warn'); return; }
     addLog(`Conectando a ${ip}:${port}...`, 'info');
     document.getElementById('manualModal')!.style.display = 'none';
     await invoke('connect_to_peer', { addr: ip, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
-    goToPainel(); // voltar ao Painel após conectar
+    goToPainel();
   };
 
-  (window as any).connectToPeer = async (addr: string, port: number) => {
+  const connectToPeer = async (addr: string, port: number) => {
     addLog(`Conectando a ${addr}:${port}...`, 'info');
     await invoke('connect_to_peer', { addr, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
-    goToPainel(); // voltar ao Painel após conectar
+    goToPainel();
   };
-
-  // Auto-descoberta apenas se a aba Dispositivos estiver visível e não conectado
+  // Auto-descoberta
   setTimeout(async () => {
     try {
       const status = await invoke<StatusPayload>('get_status');
-      if (!status.connected) {
-        (window as any).refreshDevices?.();
-      }
+      if (!status.connected) refreshDevices();
     } catch { /* fora do Tauri */ }
   }, 1500);
 
@@ -1099,43 +1079,44 @@ export async function renderDashboard(): Promise<void> {
     input.value = '';
   });
 
-  // ── Conectar todos os botões via addEventListener ────────────────────────────
+  // ── Conectar TODOS os botões via addEventListener (referência direta) ────────
   const on = (id: string, fn: () => void) =>
     document.getElementById(id)?.addEventListener('click', fn);
 
-  on('btnSendFile',        () => (window as any).sendFileDialog?.());
-  on('btnDisconnect',      () => (window as any).doDisconnect?.());
-  on('btnConnect',         () => (window as any).connectToPeer ? null : (window as any).addManualDevice?.());
-  on('pos-above',          () => (window as any).setPeerPosition?.('above'));
-  on('pos-left',           () => (window as any).setPeerPosition?.('left'));
-  on('pos-right',          () => (window as any).setPeerPosition?.('right'));
-  on('pos-below',          () => (window as any).setPeerPosition?.('below'));
-  on('btnRefreshDevices',  () => (window as any).refreshDevices?.());
-  on('btnAddManual',       () => (window as any).addManualDevice?.());
-  on('btnConnectManual',   () => (window as any).connectManual?.());
+  on('btnSendFile',        sendFileDialog);
+  on('btnDisconnect',      doDisconnect);
+  on('btnConnect',         addManualDevice);
+  on('pos-above',          () => setPeerPosition('above'));
+  on('pos-left',           () => setPeerPosition('left'));
+  on('pos-right',          () => setPeerPosition('right'));
+  on('pos-below',          () => setPeerPosition('below'));
+  on('btnRefreshDevices',  refreshDevices);
+  on('btnAddManual',       addManualDevice);
+  on('btnConnectManual',   connectManual);
   on('btnCloseManual',     () => { const m = document.getElementById('manualModal'); if (m) m.style.display = 'none'; });
-  on('btnCopyLogs',        () => (window as any).copyLogs?.());
-  on('btnClearLogs',       () => (window as any).clearLogs?.());
-  on('btnApplyServerAddr', () => (window as any).applyServerAddr?.());
-  on('btnToggleKey',       () => (window as any).toggleKey?.());
-  on('themeDark',          () => (window as any).setTheme?.('dark'));
-  on('themeLight',         () => (window as any).setTheme?.('light'));
-  on('btnLockMode',        () => (window as any).toggleLockMode?.());
-  on('btnClearHistory',    () => (window as any).clearHistory?.());
-  on('btnConfirmReset',    () => (window as any).confirmReset?.());
-  on('btnCancelReset',     () => (window as any).closeResetModal?.());
-  on('btnDoReset',         () => (window as any).doReset?.());
-  on('btnDiscardSettings', () => (window as any).loadCurrentSettings?.());
-  on('btnSaveConfig',      () => (window as any).saveConfig?.());
-  on('btnApproveConn',     () => (window as any).approveConn?.());
-  on('btnRejectConn',      () => (window as any).rejectConn?.());
+  on('btnCopyLogs',        copyLogs);
+  on('btnClearLogs',       () => clearLogs());
+  on('btnApplyServerAddr', applyServerAddr);
+  on('btnToggleKey',       toggleKey);
+  on('themeDark',          () => setTheme('dark'));
+  on('themeLight',         () => setTheme('light'));
+  on('btnLockMode',        toggleLockMode);
+  on('btnClearHistory',    clearHistory);
+  on('btnConfirmReset',    confirmReset);
+  on('btnCancelReset',     closeResetModal);
+  on('btnDoReset',         doReset);
+  on('btnDiscardSettings', loadCurrentSettings);
+  on('btnSaveConfig',      saveConfigAndRefresh);
+  on('btnApproveConn',     approveConn);
+  on('btnRejectConn',      rejectConn);
 
-  // Cards de papel (servidor/cliente)
+  // Cards de papel (servidor/cliente) — usar referência direta
   document.querySelectorAll('[data-role]').forEach(el => {
-    el.addEventListener('click', () => {
-      (window as any).selectRoleCard?.((el as HTMLElement).dataset.role);
-    });
+    el.addEventListener('click', () => selectRoleCard((el as HTMLElement).dataset.role!));
   });
+
+  // Atualizar referência global para loadRecentPeers (usado em renderDeviceCards)
+  (window as any).connectToPeer = connectToPeer;
 }
 
 // updateStatus foi substituído por onStatusChange no módulo ConnectionStatus
@@ -1234,12 +1215,10 @@ function renderDiscoveredDevices(peers: PeerInfo[]) {
     port: p.port,
   }));
 
-  // Usar createElement em vez de innerHTML para evitar XSS via onclick inline
   grid.innerHTML = '';
   renderDeviceCards(grid, devices);
 }
 
-/** Renderiza cards de dispositivos sem innerHTML com handlers inline (previne XSS) */
 function renderDeviceCards(
   container: HTMLElement,
   devices: { name: string; ip: string; icon: string; online: boolean; addr: string | null; port: number }[]
@@ -1300,9 +1279,10 @@ function renderDeviceCards(
 
     // Registrar click via addEventListener (sem onclick inline — previne XSS)
     if (d.addr) {
-      const addr = d.addr;   // captura por closure (evitar referência mutável)
+      const addr = d.addr;
       const port = d.port;
       card.addEventListener('click', () => {
+        // connectToPeer exposto via window para acesso de funções fora do escopo
         (window as any).connectToPeer?.(addr, port);
       });
     }
