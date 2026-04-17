@@ -58,19 +58,19 @@ export async function renderDashboard(): Promise<void> {
         </div>
 
         <nav class="nav">
-          <div class="nav-item active" id="nav-painel" onclick="navTo('painel',this)">
+          <div class="nav-item active" id="nav-painel" data-nav="painel">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             Painel
           </div>
-          <div class="nav-item" id="nav-dispositivos" onclick="navTo('dispositivos',this)">
+          <div class="nav-item" id="nav-dispositivos" data-nav="dispositivos">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/></svg>
             Dispositivos
           </div>
-          <div class="nav-item" id="nav-seguranca" onclick="navTo('seguranca',this)">
+          <div class="nav-item" id="nav-seguranca" data-nav="seguranca">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             Segurança
           </div>
-          <div class="nav-item" id="nav-configuracoes" onclick="navTo('configuracoes',this)">
+          <div class="nav-item" id="nav-configuracoes" data-nav="configuracoes">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
             Configurações
           </div>
@@ -151,8 +151,8 @@ export async function renderDashboard(): Promise<void> {
                   <div class="section-sub">Clique nas setas para definir a posição do outro monitor</div>
                 </div>
                 <div style="display:flex;gap:10px;">
-                  <button class="btn btn-outline" onclick="sendFileDialog()">📁 Enviar Arquivo</button>
-                  <button class="btn btn-outline" id="btnDisconnect" style="display:none;" onclick="doDisconnect()">Desconectar</button>
+                  <button class="btn btn-outline" id="btnSendFile">📁 Enviar Arquivo</button>
+                  <button class="btn btn-outline" id="btnDisconnect" style="display:none;">Desconectar</button>
                   <button class="btn btn-cyan" id="btnConnect">Conectar</button>
                 </div>
               </div>
@@ -161,13 +161,13 @@ export async function renderDashboard(): Promise<void> {
                 <div style="font-size:11px;color:var(--text-3);text-align:center;margin-bottom:8px;">Posição do monitor remoto:</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:4px;width:120px;margin:0 auto;">
                   <div></div>
-                  <button onclick="setPeerPosition('above')" id="pos-above" class="btn btn-outline" style="padding:6px;font-size:14px;">↑</button>
+                  <button id="pos-above" class="btn btn-outline" style="padding:6px;font-size:14px;">↑</button>
                   <div></div>
-                  <button onclick="setPeerPosition('left')"  id="pos-left"  class="btn btn-outline" style="padding:6px;font-size:14px;">←</button>
+                  <button id="pos-left"  class="btn btn-outline" style="padding:6px;font-size:14px;">←</button>
                   <div style="background:var(--cyan-dim);border:1px solid var(--border-c);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--cyan);">📍</div>
-                  <button onclick="setPeerPosition('right')" id="pos-right" class="btn btn-cyan"    style="padding:6px;font-size:14px;">→</button>
+                  <button id="pos-right" class="btn btn-cyan"    style="padding:6px;font-size:14px;">→</button>
                   <div></div>
-                  <button onclick="setPeerPosition('below')" id="pos-below" class="btn btn-outline" style="padding:6px;font-size:14px;">↓</button>
+                  <button id="pos-below" class="btn btn-outline" style="padding:6px;font-size:14px;">↓</button>
                   <div></div>
                 </div>
               </div>
@@ -191,11 +191,11 @@ export async function renderDashboard(): Promise<void> {
                 <div class="section-sub" id="deviceSubtitle">Buscando na rede local...</div>
               </div>
               <div style="display:flex;gap:8px;">
-                <button class="btn btn-outline" id="btnRefreshDevices" onclick="refreshDevices()">
+                <button class="btn btn-outline" id="btnRefreshDevices">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
                   Atualizar
                 </button>
-                <button class="btn btn-cyan" onclick="addManualDevice()">+ Manual</button>
+                <button class="btn btn-cyan" id="btnAddManual">+ Manual</button>
               </div>
             </div>
 
@@ -205,8 +205,8 @@ export async function renderDashboard(): Promise<void> {
               <div style="display:flex;gap:8px;">
                 <input id="manualIp" type="text" placeholder="192.168.1.100" style="flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
                 <input id="manualPort" type="number" value="24800" style="width:90px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-                <button class="btn btn-cyan" onclick="connectManual()">Conectar</button>
-                <button class="btn btn-outline" onclick="document.getElementById('manualModal').style.display='none'">✕</button>
+                <button class="btn btn-cyan" id="btnConnectManual">Conectar</button>
+                <button class="btn btn-outline" id="btnCloseManual">✕</button>
               </div>
             </div>
 
@@ -226,8 +226,8 @@ export async function renderDashboard(): Promise<void> {
                 <div style="display:flex;gap:6px;"><div style="width:10px;height:10px;border-radius:50%;background:#ff5f57;"></div><div style="width:10px;height:10px;border-radius:50%;background:#febc2e;"></div><div style="width:10px;height:10px;border-radius:50%;background:#28c840;"></div></div>
                 <code style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-2);background:var(--bg-4);padding:3px 10px;border-radius:5px;">/var/log/movex/connection.log</code>
                 <div style="display:flex;gap:12px;">
-                  <button onclick="copyLogs()" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3);cursor:pointer;background:none;border:none;font-family:'Inter',sans-serif;">📋 Copiar</button>
-                  <button onclick="clearLogs()" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3);cursor:pointer;background:none;border:none;font-family:'Inter',sans-serif;">🗑 Limpar Logs</button>
+                  <button id="btnCopyLogs" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3);cursor:pointer;background:none;border:none;font-family:'Inter',sans-serif;">📋 Copiar</button>
+                  <button id="btnClearLogs" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3);cursor:pointer;background:none;border:none;font-family:'Inter',sans-serif;">🗑 Limpar Logs</button>
                 </div>
               </div>
               <div id="logBody" style="padding:16px 20px;max-height:300px;overflow-y:auto;"></div>
@@ -249,14 +249,14 @@ export async function renderDashboard(): Promise<void> {
             <div class="card" style="margin-bottom:14px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:14px;">Papel desta Máquina</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                <div id="roleServerCard" onclick="selectRoleCard('server')" style="border:2px solid var(--cyan);background:linear-gradient(135deg,#0f1824,#0b0c10);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
+                <div id="roleServerCard" data-role="server" style="border:2px solid var(--cyan);background:linear-gradient(135deg,#0f1824,#0b0c10);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
                   <div style="width:36px;height:36px;background:var(--cyan-dim);border-radius:9px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.8"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/><path d="M6 9h.01M9 9h6"/></svg>
                   </div>
                   <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">Servidor</div>
                   <div style="font-size:11px;color:var(--text-2);">Controla outras máquinas com este teclado e mouse</div>
                 </div>
-                <div id="roleClientCard" onclick="selectRoleCard('client')" style="border:1.5px solid var(--border);background:var(--bg-3);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
+                <div id="roleClientCard" data-role="client" style="border:1.5px solid var(--border);background:var(--bg-3);border-radius:12px;padding:18px;cursor:pointer;transition:all .2s;">
                   <div style="width:36px;height:36px;background:var(--bg-5);border-radius:9px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-2)" stroke-width="1.8"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                   </div>
@@ -271,7 +271,7 @@ export async function renderDashboard(): Promise<void> {
                 <div style="display:flex;gap:8px;">
                   <input id="serverAddrInput" type="text" placeholder="Ex: 192.168.1.100 ou nome-do-pc.local"
                     style="flex:1;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-                  <button onclick="applyServerAddr()" class="btn btn-cyan" style="white-space:nowrap;">Salvar</button>
+                  <button id="btnApplyServerAddr" class="btn btn-cyan" style="white-space:nowrap;">Salvar</button>
                 </div>
                 <div style="font-size:11px;color:var(--text-3);margin-top:6px;">IP ou hostname do computador servidor na rede local</div>
               </div>
@@ -296,7 +296,7 @@ export async function renderDashboard(): Promise<void> {
                 </div>
                 <div style="position:relative;">
                   <input type="password" id="keyInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text);outline:none;letter-spacing:2px;" />
-                  <button onclick="toggleKey()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
+                  <button id="btnToggleKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
                 </div>
                 <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Use a mesma chave nos dois computadores</div>
               </div>
@@ -330,8 +330,8 @@ export async function renderDashboard(): Promise<void> {
               <div class="card">
                 <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px;">🎨 Tema</div>
                 <div style="display:flex;gap:8px;">
-                  <button id="themeDark" onclick="setTheme('dark')" style="flex:1;padding:8px;border-radius:8px;border:2px solid var(--cyan);background:var(--bg-2);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;">🌙 Escuro</button>
-                  <button id="themeLight" onclick="setTheme('light')" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;">☀️ Claro</button>
+                  <button id="themeDark" data-theme="dark" style="flex:1;padding:8px;border-radius:8px;border:2px solid var(--cyan);background:var(--bg-2);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;">🌙 Escuro</button>
+                  <button id="themeLight" data-theme="light" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;">☀️ Claro</button>
                 </div>
               </div>
               <!-- Modo Lock -->
@@ -339,7 +339,7 @@ export async function renderDashboard(): Promise<void> {
                 <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;">🔐 Modo Lock</div>
                 <div style="font-size:11px;color:var(--text-3);margin-bottom:12px;">Pausa a transição de cursor entre telas</div>
                 <div style="display:flex;gap:8px;align-items:center;">
-                  <button id="btnLockMode" onclick="toggleLockMode()" class="btn btn-outline" style="flex:1;">
+                  <button id="btnLockMode" class="btn btn-outline" style="flex:1;">
                     🔓 Desbloqueado
                   </button>
                   <div style="font-size:10px;color:var(--text-3);">Atalho:<br><code id="lockKeyDisplay" style="color:var(--cyan);">Ctrl+Alt+L</code></div>
@@ -368,7 +368,7 @@ export async function renderDashboard(): Promise<void> {
             <div class="card" style="margin-bottom:14px;">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text);">🕐 Conexões Recentes</div>
-                <button onclick="clearHistory()" class="btn btn-outline" style="font-size:10px;padding:4px 10px;">Limpar</button>
+                <button id="btnClearHistory" class="btn btn-outline" style="font-size:10px;padding:4px 10px;">Limpar</button>
               </div>
               <div id="recentPeersList" style="display:flex;flex-direction:column;gap:6px;">
                 <div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>
@@ -378,13 +378,13 @@ export async function renderDashboard(): Promise<void> {
             <!-- Ações -->
             <div style="display:flex;align-items:center;justify-content:space-between;padding-top:16px;border-top:1px solid var(--border);">
               <!-- Reset -->
-              <button onclick="confirmReset()" style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:8px;border:1px solid rgba(255,75,110,.3);background:rgba(255,75,110,.08);color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.3px;transition:all .15s;">
+              <button id="btnConfirmReset" style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:8px;border:1px solid rgba(255,75,110,.3);background:rgba(255,75,110,.08);color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.3px;transition:all .15s;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
                 Resetar Configurações
               </button>
               <div style="display:flex;gap:10px;">
-                <button class="btn-ghost" onclick="loadCurrentSettings()" style="font-size:12px;">Descartar</button>
-                <button class="btn btn-cyan" onclick="saveConfig()">Salvar Configurações</button>
+                <button id="btnDiscardSettings" class="btn-ghost" style="font-size:12px;">Descartar</button>
+                <button id="btnSaveConfig" class="btn btn-cyan">Salvar Configurações</button>
               </div>
             </div>
 
@@ -395,8 +395,8 @@ export async function renderDashboard(): Promise<void> {
                 <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:8px;">Resetar Configurações?</div>
                 <div style="font-size:13px;color:var(--text-2);line-height:1.5;margin-bottom:24px;">Todas as configurações serão apagadas e o assistente de configuração inicial será exibido novamente.</div>
                 <div style="display:flex;gap:10px;justify-content:center;">
-                  <button onclick="closeResetModal()" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border);background:var(--bg-4);color:var(--text-2);font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;">Cancelar</button>
-                  <button onclick="doReset()" style="padding:10px 24px;border-radius:8px;border:none;background:var(--danger,#ff4b6e);color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:700;cursor:pointer;">Sim, Resetar</button>
+                  <button id="btnCancelReset" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border);background:var(--bg-4);color:var(--text-2);font-family:'Inter',sans-serif;font-size:13px;font-weight:600;cursor:pointer;">Cancelar</button>
+                  <button id="btnDoReset" style="padding:10px 24px;border-radius:8px;border:none;background:var(--danger,#ff4b6e);color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:700;cursor:pointer;">Sim, Resetar</button>
                 </div>
               </div>
             </div>
@@ -442,14 +442,14 @@ export async function renderDashboard(): Promise<void> {
           <span style="color:var(--text-3);font-size:11px;">Você terá controle total para desconectar a qualquer momento.</span>
         </div>
         <div style="display:flex;gap:12px;justify-content:center;">
-          <button onclick="rejectConn()" style="
+          <button id="btnRejectConn" style="
             flex:1;padding:13px;border-radius:10px;
             background:rgba(255,75,110,.12);border:1px solid rgba(255,75,110,.3);
             color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;
             font-size:14px;font-weight:700;cursor:pointer;
             transition:all .15s;
           ">✕ Recusar</button>
-          <button onclick="approveConn()" style="
+          <button id="btnApproveConn" style="
             flex:1;padding:13px;border-radius:10px;
             background:var(--cyan);border:none;
             color:#0b0c10;font-family:'Inter',sans-serif;
@@ -464,6 +464,28 @@ export async function renderDashboard(): Promise<void> {
     </div>
   `;
   document.body.insertAdjacentHTML('beforeend', approvalModalHtml);
+
+  // ── Registrar TODOS os eventos via addEventListener (sem onclick inline) ────
+  // Necessário porque o CSP do Tauri bloqueia event handlers inline em HTML.
+
+  // Navegação da sidebar
+  document.querySelectorAll('.nav-item[data-nav]').forEach(el => {
+    el.addEventListener('click', () => {
+      const page = (el as HTMLElement).dataset.nav!;
+      document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.getElementById(`page-${page}`)?.classList.add('active');
+      el.classList.add('active');
+      const titles: Record<string, string> = {
+        painel: 'Painel Principal',
+        dispositivos: 'Dispositivos',
+        seguranca: 'Logs de Segurança · Interface de Diagnóstico',
+        configuracoes: 'Segurança & Conexão',
+      };
+      const titleEl = document.getElementById('pageTitle');
+      if (titleEl) titleEl.textContent = titles[page] ?? page;
+    });
+  });
 
   let approvalCountdownTimer: ReturnType<typeof setInterval> | null = null;
   let approvalSeconds = 60;
@@ -507,24 +529,6 @@ export async function renderDashboard(): Promise<void> {
     hideApprovalModal();
     await invoke('reject_connection').catch(console.warn);
     addLog('Conexão recusada ✕', 'warn');
-  };
-
-  // ── navTo registrado IMEDIATAMENTE — antes de qualquer await ────────────────
-  // Garante que cliques na sidebar funcionam mesmo se os awaits abaixo demorarem
-  (window as any).navTo = (page: string, el: HTMLElement) => {
-    document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    const pageEl = document.getElementById(`page-${page}`);
-    if (pageEl) pageEl.classList.add('active');
-    el.classList.add('active');
-    const titles: Record<string, string> = {
-      painel: 'Painel Principal',
-      dispositivos: 'Dispositivos',
-      seguranca: 'Logs de Segurança · Interface de Diagnóstico',
-      configuracoes: 'Segurança & Conexão',
-    };
-    const titleEl = document.getElementById('pageTitle');
-    if (titleEl) titleEl.textContent = titles[page] ?? page;
   };
 
   // Polling de aprovação movido para ConnectionStatus.startApprovalPolling — chamado abaixo
@@ -1095,7 +1099,43 @@ export async function renderDashboard(): Promise<void> {
     input.value = '';
   });
 
-  // Sem logs falsos — apenas logs reais do backend
+  // ── Conectar todos os botões via addEventListener ────────────────────────────
+  const on = (id: string, fn: () => void) =>
+    document.getElementById(id)?.addEventListener('click', fn);
+
+  on('btnSendFile',        () => (window as any).sendFileDialog?.());
+  on('btnDisconnect',      () => (window as any).doDisconnect?.());
+  on('btnConnect',         () => (window as any).connectToPeer ? null : (window as any).addManualDevice?.());
+  on('pos-above',          () => (window as any).setPeerPosition?.('above'));
+  on('pos-left',           () => (window as any).setPeerPosition?.('left'));
+  on('pos-right',          () => (window as any).setPeerPosition?.('right'));
+  on('pos-below',          () => (window as any).setPeerPosition?.('below'));
+  on('btnRefreshDevices',  () => (window as any).refreshDevices?.());
+  on('btnAddManual',       () => (window as any).addManualDevice?.());
+  on('btnConnectManual',   () => (window as any).connectManual?.());
+  on('btnCloseManual',     () => { const m = document.getElementById('manualModal'); if (m) m.style.display = 'none'; });
+  on('btnCopyLogs',        () => (window as any).copyLogs?.());
+  on('btnClearLogs',       () => (window as any).clearLogs?.());
+  on('btnApplyServerAddr', () => (window as any).applyServerAddr?.());
+  on('btnToggleKey',       () => (window as any).toggleKey?.());
+  on('themeDark',          () => (window as any).setTheme?.('dark'));
+  on('themeLight',         () => (window as any).setTheme?.('light'));
+  on('btnLockMode',        () => (window as any).toggleLockMode?.());
+  on('btnClearHistory',    () => (window as any).clearHistory?.());
+  on('btnConfirmReset',    () => (window as any).confirmReset?.());
+  on('btnCancelReset',     () => (window as any).closeResetModal?.());
+  on('btnDoReset',         () => (window as any).doReset?.());
+  on('btnDiscardSettings', () => (window as any).loadCurrentSettings?.());
+  on('btnSaveConfig',      () => (window as any).saveConfig?.());
+  on('btnApproveConn',     () => (window as any).approveConn?.());
+  on('btnRejectConn',      () => (window as any).rejectConn?.());
+
+  // Cards de papel (servidor/cliente)
+  document.querySelectorAll('[data-role]').forEach(el => {
+    el.addEventListener('click', () => {
+      (window as any).selectRoleCard?.((el as HTMLElement).dataset.role);
+    });
+  });
 }
 
 // updateStatus foi substituído por onStatusChange no módulo ConnectionStatus
