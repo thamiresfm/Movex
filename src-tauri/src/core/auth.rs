@@ -4,7 +4,9 @@ use sha2::{Sha256, Digest};
 /// Computa HMAC-SHA256 real: H(K XOR opad || H(K XOR ipad || message))
 /// Onde K = psk_hex (como bytes), message = server_nonce
 pub fn compute_hmac(psk_hex: &str, server_nonce: &str) -> String {
-    let key = psk_hex.as_bytes();
+    // Decodificar PSK de hex para bytes reais (256 bits de entropia efetiva)
+    let key_bytes = hex::decode(psk_hex).unwrap_or_else(|_| psk_hex.as_bytes().to_vec());
+    let key = key_bytes.as_slice();
     let msg = server_nonce.as_bytes();
 
     // Preparar chave (pad para 64 bytes — block size do SHA-256)
@@ -58,7 +60,7 @@ mod tests {
         let result = compute_hmac("616263", "313233");
         assert_eq!(
             result,
-            "530a08becdf33866dc22d5deebe0eff00063a02859f41d67d2e4735c56f0f8af",
+            "ab1cf4202ec5e2318ddb7a118dae531640700891a7be1b0b8aa7654768a27db9",
             "HMAC produziu valor inesperado — possível regressão no algoritmo"
         );
     }

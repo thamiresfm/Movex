@@ -157,7 +157,10 @@ impl Settings {
         let mut to_save = self.clone();
         to_save.lock_mode = false;
         let json = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| e.to_string())?;
+        // Escrever em arquivo temporário + rename atômico para evitar corrupção
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
         Ok(())
     }
 

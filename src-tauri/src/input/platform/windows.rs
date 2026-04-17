@@ -144,10 +144,23 @@ impl InputCapture for WindowsCapture {
 
             unsafe {
                 let hmod = GetModuleHandleW(None).unwrap_or_default();
-                let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0)
-                    .expect("SetWindowsHookEx mouse falhou");
-                let kb_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0)
-                    .expect("SetWindowsHookEx keyboard falhou");
+                let mouse_hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        error!("WindowsCapture: falha ao instalar hook de mouse: {} — verifique permissões", e);
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                };
+                let kb_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        error!("WindowsCapture: falha ao instalar hook de teclado: {}", e);
+                        UnhookWindowsHookEx(mouse_hook).ok();
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                };
 
                 info!("WindowsCapture: hooks instalados (mouse + teclado)");
 

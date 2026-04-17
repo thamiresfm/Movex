@@ -270,39 +270,36 @@ async fn handle_client<S>(
     // isso é feito dentro do loop principal abaixo
 
     let capture_result = capture.start(Box::new(move |event| {
-        // Verificar se cursor cruzou a borda
-        if let crate::input::InputEvent::MouseMove { x, y } = &event {
-            let px = x * layout_clone.local.width as f32;
-            let py = y * layout_clone.local.height as f32;
-            match check_boundary(px, py, &layout_clone) {
-                BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
-                    // Travar cursor fisicamente na borda (lock_cursor)
-                    capture_ref_for_boundary.lock_cursor();
-                    // Enviar EnterScreen + posição de entrada ao cliente
-                    let _ = msg_tx_for_capture.try_send(Message::EnterScreen);
-                    let _ = msg_tx_for_capture.try_send(Message::Input(
-                        crate::input::InputEvent::MouseMove { x: entry_x, y: entry_y }
-                    ));
-                    // Atualizar estado para Remote
-                    let state_clone = state_for_capture.clone();
-                    tokio::spawn(async move {
-                        let mut active = state_clone.active_screen.lock().await;
-                        *active = ActiveScreen::Remote;
-                    });
-                    return; // não enviar o MouseMove original
+        // Verificar modo lock ANTES de qualquer lógica — lock impede transição de cursor
+        let locked = state_for_capture.lock_mode.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Verificar se cursor cruzou a borda (apenas quando não há lock)
+        if !locked {
+            if let crate::input::InputEvent::MouseMove { x, y } = &event {
+                let px = x * layout_clone.local.width as f32;
+                let py = y * layout_clone.local.height as f32;
+                match check_boundary(px, py, &layout_clone) {
+                    BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
+                        // Travar cursor fisicamente na borda
+                        capture_ref_for_boundary.lock_cursor();
+                        // Atualizar estado para Remote atomicamente (AtomicBool) — C2 fix
+                        state_for_capture.active_screen_remote
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        // Enviar EnterScreen + posição de entrada ao cliente
+                        let _ = msg_tx_for_capture.try_send(Message::EnterScreen);
+                        let _ = msg_tx_for_capture.try_send(Message::Input(
+                            crate::input::InputEvent::MouseMove { x: entry_x, y: entry_y }
+                        ));
+                        return; // não enviar o MouseMove original
+                    }
+                    BoundaryResult::Local => {}
                 }
-                BoundaryResult::Local => {}
             }
         }
 
-        // Verificar modo lock — bloquear transição
-        let locked = state_for_capture.lock_mode.load(std::sync::atomic::Ordering::Relaxed);
-
-        // Só enviar evento ao cliente se o cursor estiver na tela remota e lock desativado
-        let is_remote = !locked && state_for_capture.active_screen
-            .try_lock()
-            .map(|s| *s == ActiveScreen::Remote)
-            .unwrap_or(false);
+        // Verificar estado remoto via AtomicBool — lock-free, sem try_lock instável
+        let is_remote = !locked && state_for_capture.active_screen_remote
+            .load(std::sync::atomic::Ordering::Acquire);
 
         if is_remote {
             let _ = msg_tx_for_capture.try_send(Message::Input(event));
@@ -364,8 +361,10 @@ async fn handle_client<S>(
                         }
                     }
                     Ok(Message::LeaveScreen) => {
-                        // Cursor voltou ao servidor — liberar o travamento físico
+                        // Cursor voltou ao servidor — liberar travamento físico
                         capture.unlock_cursor();
+                        // Atualizar AtomicBool primeiro (hot-path do callback usa este)
+                        state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Local;
                     }

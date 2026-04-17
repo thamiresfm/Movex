@@ -134,8 +134,14 @@ impl InputCapture for MacOsCapture {
             match tap_result {
                 Ok(tap) => {
                     info!("MacOsCapture: CGEventTap criado");
-                    let loop_src = tap.mach_port.create_runloop_source(0)
-                        .expect("RunLoopSource");
+                    let loop_src = match tap.mach_port.create_runloop_source(0) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            error!("MacOsCapture: falha ao criar RunLoopSource");
+                            running.store(false, Ordering::SeqCst);
+                            return;
+                        }
+                    };
                     let run_loop = unsafe { core_foundation::runloop::CFRunLoop::get_current() };
                     run_loop.add_source(&loop_src, unsafe {
                         core_foundation::runloop::kCFRunLoopDefaultMode

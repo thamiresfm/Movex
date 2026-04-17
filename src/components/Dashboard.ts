@@ -6,6 +6,16 @@ import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
 import { initStatusListener, onStatusChange, startApprovalPolling, cleanupStatusHandlers } from "./ConnectionStatus";
 import { cleanupAllListeners } from "../utils/tauri-events";
 
+/** Escapa caracteres especiais HTML — usada em todo o módulo para prevenir XSS */
+function esc(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 interface StatusPayload {
   connected: boolean;
   status_text: string;
@@ -542,7 +552,12 @@ export async function renderDashboard(): Promise<void> {
     stopApprovalPolling();
     cleanupFileTransfer();
     cleanupAllListeners();
-    cleanupStatusHandlers(); // evita acúmulo de handlers em re-renders
+    cleanupStatusHandlers();
+    // Limpar countdown de aprovação se modal ainda estiver aberto
+    if (approvalCountdownTimer) {
+      clearInterval(approvalCountdownTimer);
+      approvalCountdownTimer = null;
+    }
   };
 
   // Delegar status updates para o módulo ConnectionStatus
@@ -1183,8 +1198,7 @@ function renderDiscoveredDevices(peers: PeerInfo[]) {
 }
 
 function deviceCards(devices: {name:string;ip:string;icon:string;online:boolean;addr:string|null;port:number}[]): string {
-  // Construir HTML seguro — campos name/ip/icon vêm da rede, usar encoding manual
-  const esc = (s: string) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  // esc() definida no escopo do módulo (linha ~9) — não redefinir aqui
   return devices.map(d => {
     const onclick = d.addr
       ? `onclick="connectToPeer('${esc(d.addr)}', ${Number(d.port)})"` : '';

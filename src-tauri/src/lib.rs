@@ -674,7 +674,10 @@ async fn set_screen_border(
 
 pub fn run() {
     // Instalar o CryptoProvider do rustls antes de qualquer conexão TLS
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    if let Err(e) = rustls::crypto::ring::default_provider().install_default() {
+        // Pode falhar se já instalado — apenas logar, não é fatal
+        tracing::debug!("CryptoProvider já instalado: {:?}", e);
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -718,7 +721,14 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &sep, &lock, &disco, &sep, &quit])?;
 
             let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(match app.default_window_icon() {
+                    Some(icon) => icon.clone(),
+                    None => {
+                        tracing::warn!("Ícone padrão não encontrado — system tray sem ícone");
+                        // Continuar sem ícone em vez de crash
+                        return Ok(());
+                    }
+                })
                 .menu(&menu)
                 .tooltip("Movex — KVM por software")
                 .on_menu_event({

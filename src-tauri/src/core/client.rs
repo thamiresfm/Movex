@@ -247,13 +247,13 @@ async fn run_session<S>(
             result = recv_message(stream) => {
                 match result {
                     Ok(Message::EnterScreen) => {
+                        state.active_screen_remote.store(true, std::sync::atomic::Ordering::Release);
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Remote;
                         info!("Cursor entrou nesta máquina");
-                        // A borda luminosa é gerenciada pelo frontend via set_screen_border
-                        // Aqui apenas emitimos o estado para o frontend reagir
                     }
                     Ok(Message::LeaveScreen) => {
+                        state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Local;
                     }

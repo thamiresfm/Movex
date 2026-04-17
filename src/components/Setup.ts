@@ -66,10 +66,10 @@ export async function renderSetup(): Promise<void> {
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
               <div style="font-size:10px;color:var(--text-3);margin-top:4px;">IP ou hostname do servidor na rede local</div>
             </div>
-            <!-- Nome da máquina -->
+            <!-- Nome da máquina — value preenchido via JS para evitar XSS -->
             <div>
               <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Nome desta máquina</label>
-              <input id="hostnameInput" type="text" value="${settings.hostname}"
+              <input id="hostnameInput" type="text"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'Inter',sans-serif;font-size:13px;color:var(--text);outline:none;" />
             </div>
             <!-- Porta TCP + posição do peer -->
@@ -130,6 +130,10 @@ export async function renderSetup(): Promise<void> {
       </div>
     </div>
   `;
+
+  // Preencher hostname via .value (não via innerHTML) para evitar XSS
+  const hostnameInput = document.getElementById('hostnameInput') as HTMLInputElement;
+  if (hostnameInput) hostnameInput.value = settings.hostname;
 
   let selectedMode = 'server';
 

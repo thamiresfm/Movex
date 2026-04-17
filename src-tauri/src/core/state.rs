@@ -47,6 +47,9 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     pub connection_status: Arc<Mutex<ConnectionStatus>>,
     pub active_screen: Arc<Mutex<ActiveScreen>>,
+    /// Flag atômico para acesso lock-free no hot-path do callback de captura
+    /// true = cursor está na tela remota, false = local
+    pub active_screen_remote: Arc<std::sync::atomic::AtomicBool>,
     /// Token para cancelar a task de conexão em andamento
     pub cancel_token: Arc<Mutex<Option<CancellationToken>>>,
     /// Canal para enviar mensagens ao peer conectado
@@ -75,6 +78,7 @@ impl AppState {
             settings: Arc::new(Mutex::new(settings)),
             connection_status: Arc::new(Mutex::new(ConnectionStatus::Disconnected)),
             active_screen: Arc::new(Mutex::new(ActiveScreen::Local)),
+            active_screen_remote: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cancel_token: Arc::new(Mutex::new(None)),
             message_tx: Arc::new(Mutex::new(None)),
             session_started_at: Arc::new(Mutex::new(None)),
