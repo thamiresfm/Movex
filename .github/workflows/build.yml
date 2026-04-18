@@ -6,6 +6,7 @@ on:
       - 'v*'
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -74,7 +75,8 @@ jobs:
           node-version: '20'
           cache: npm
 
-      - run: npm ci
+      # package-lock.json não está versionado — usar install
+      - run: npm install
 
       # Criar o release draft primeiro para ter o releaseId
       - name: Criar release no GitHub
@@ -143,7 +145,7 @@ jobs:
           node-version: '20'
           cache: npm
 
-      - run: npm ci
+      - run: npm install
 
       # Buscar o releaseId criado pelo job macOS
       - name: Obter release ID
@@ -156,7 +158,9 @@ jobs:
           echo "id=$RELEASE_ID" >> $GITHUB_OUTPUT
           echo "Release ID: $RELEASE_ID"
 
+      # Opcional: repositórios sem PFX ainda geram .msi/.exe (sem assinatura de código)
       - name: Decodificar certificado de assinatura
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
         shell: pwsh
         run: |
           $cert = "${{ secrets.WINDOWS_CERTIFICATE }}"
@@ -165,6 +169,7 @@ jobs:
           Write-Host "Certificado decodificado."
 
       - name: Instalar certificado no Windows
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
         shell: pwsh
         run: |
           $pwd = ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force
