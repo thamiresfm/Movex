@@ -158,24 +158,23 @@ jobs:
           echo "id=$RELEASE_ID" >> $GITHUB_OUTPUT
           echo "Release ID: $RELEASE_ID"
 
-      # Opcional: repositórios sem PFX ainda geram .msi/.exe (sem assinatura de código)
-      - name: Decodificar certificado de assinatura
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+      # Opcional: sem PFX nos secrets o build continua (sem assinatura de código).
+      # Não usar `if: secrets.*` — o linter do Actions não aceita `secrets` nessa expressão.
+      - name: Certificado Windows (opcional)
         shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          $cert = "${{ secrets.WINDOWS_CERTIFICATE }}"
-          $certBytes = [Convert]::FromBase64String($cert)
-          [IO.File]::WriteAllBytes("$env:TEMP\movex-cert.pfx", $certBytes)
-          Write-Host "Certificado decodificado."
-
-      - name: Instalar certificado no Windows
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
-        shell: pwsh
-        run: |
-          $pwd = ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force
-          Import-PfxCertificate -FilePath "$env:TEMP\movex-cert.pfx" `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -Password $pwd
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "Sem WINDOWS_CERTIFICATE — a compilar sem assinatura de código."
+            exit 0
+          }
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $pfx = "$env:TEMP\movex-cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, $certBytes)
+          $pwd = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
           Write-Host "Certificado instalado."
 
       - name: Build e upload Windows
