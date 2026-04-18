@@ -160,9 +160,17 @@ export async function renderSetup(): Promise<void> {
     const port = parseInt((document.getElementById('portInput') as HTMLInputElement)?.value) || 24800;
     const peerPosition = (document.getElementById('peerPositionInput') as HTMLSelectElement)?.value || 'right';
     await invoke('save_settings', {
-      hostname, role: selectedMode, serverAddr,
-      port, pskHex: settings.psk_hex,
-      peerPosition, autostart: false, theme: 'dark',
+      hostname,
+      screenName: hostname,
+      expectedClientScreenName: null,
+      launchConnectionOnStartup: false,
+      role: selectedMode,
+      serverAddr,
+      port,
+      pskHex: settings.psk_hex,
+      peerPosition,
+      autostart: false,
+      theme: 'dark',
     }).catch(console.warn);
     showStep(2);
   };

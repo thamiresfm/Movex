@@ -175,3 +175,11 @@ html, body { height: 100%; font-family: 'Inter', sans-serif; }
 .log-msg { color: var(--text-2); }
 .log-line.warn-line { background: rgba(245,166,35,.05); border-radius: 4px; padding: 0 6px; }
 .log-line.warn-line .log-msg { color: var(--warn); font-style: italic; }
+
+/* Dispositivos — painel IP manual (details) */
+.manual-ip-details > summary {
+  list-style: none;
+}
+.manual-ip-details > summary::-webkit-details-marker {
+  display: none;
+}

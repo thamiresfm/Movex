@@ -19,6 +19,8 @@ pub struct StatusPayload {
     pub connected: bool,
     pub status_text: String,
     pub peer_hostname: Option<String>,
+    /// Endereço do peer quando conectado (ex.: `192.168.1.10:24800`).
+    pub peer_addr: Option<String>,
     pub latency_ms: Option<u32>,
     pub active_screen: String,
     pub uptime_secs: u64,
@@ -27,6 +29,9 @@ pub struct StatusPayload {
 #[derive(serde::Serialize, Clone)]
 pub struct SettingsPayload {
     pub hostname: String,
+    pub screen_name: String,
+    pub expected_client_screen_name: Option<String>,
+    pub launch_connection_on_startup: bool,
     pub role: String,
     pub server_addr: Option<String>,
     pub port: u16,
@@ -55,14 +60,21 @@ async fn build_status_payload(state: &SharedState) -> StatusPayload {
     let status = state.connection_status.lock().await.clone();
     let active = state.active_screen.lock().await.clone();
 
-    let (connected, peer_hostname, latency_ms) = match &status {
-        ConnectionStatus::Connected { peer_hostname, latency_ms } => {
-            (true, Some(peer_hostname.clone()), Some(*latency_ms))
-        }
+    let (connected, peer_hostname, peer_addr, latency_ms) = match &status {
+        ConnectionStatus::Connected {
+            peer_hostname,
+            peer_addr,
+            latency_ms,
+        } => (
+            true,
+            Some(peer_hostname.clone()),
+            Some(peer_addr.clone()),
+            Some(*latency_ms),
+        ),
         ConnectionStatus::PendingApproval { peer_hostname } => {
-            (false, Some(peer_hostname.clone()), None)
+            (false, Some(peer_hostname.clone()), None, None)
         }
-        _ => (false, None, None),
+        _ => (false, None, None, None),
     };
 
     let uptime_secs = state
@@ -76,6 +88,7 @@ async fn build_status_payload(state: &SharedState) -> StatusPayload {
         connected,
         status_text: status.to_string(),
         peer_hostname,
+        peer_addr,
         latency_ms,
         active_screen: format!("{:?}", active),
         uptime_secs,
@@ -107,6 +120,9 @@ async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, 
     let psk_preview = format!("{}...", &s.psk_hex[..s.psk_hex.len().min(8)]);
     Ok(SettingsPayload {
         hostname: s.hostname.clone(),
+        screen_name: s.screen_name.clone(),
+        expected_client_screen_name: s.expected_client_screen_name.clone(),
+        launch_connection_on_startup: s.launch_connection_on_startup,
         role: format!("{:?}", s.role).to_lowercase(),
         server_addr: s.server_addr.clone(),
         port: s.port,
@@ -128,6 +144,9 @@ async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, 
 async fn save_settings(
     state: State<'_, SharedState>,
     hostname: String,
+    screen_name: String,
+    expected_client_screen_name: Option<String>,
+    launch_connection_on_startup: bool,
     role: String,
     server_addr: Option<String>,
     port: u16,
@@ -143,6 +162,17 @@ async fn save_settings(
         autostart_changed = s.autostart != autostart;
         autostart_enable = autostart;
         s.hostname = hostname;
+        let sn = screen_name.trim();
+        s.screen_name = if sn.is_empty() {
+            s.hostname.clone()
+        } else {
+            sn.to_string()
+        };
+        s.expected_client_screen_name = expected_client_screen_name
+            .as_ref()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty());
+        s.launch_connection_on_startup = launch_connection_on_startup;
         s.role = if role == "server" { Role::Server } else { Role::Client };
         s.server_addr = server_addr;
         s.port = port;
@@ -865,7 +895,14 @@ pub fn run() {
                 if setup_done {
                     let state_auto = shared_state.clone();
                     tauri::async_runtime::spawn(async move {
-                        let role = state_auto.settings.lock().await.role.clone();
+                        let (role, auto_launch) = {
+                            let s = state_auto.settings.lock().await;
+                            (s.role.clone(), s.launch_connection_on_startup)
+                        };
+                        if !auto_launch {
+                            tracing::info!("Arranque automático da sessão desligado (estilo Barrier: use Conectar no painel).");
+                            return;
+                        }
                         let cancel = state_auto.new_cancel_token().await;
                         match role {
                             crate::config::Role::Server => {

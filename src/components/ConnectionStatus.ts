@@ -10,9 +10,34 @@ export interface StatusPayload {
   connected: boolean;
   status_text: string;
   peer_hostname?: string;
+  peer_addr?: string;
   latency_ms?: number;
   active_screen: string;
   uptime_secs: number;
+}
+
+/** Tauri/serde pode enviar snake_case ou camelCase — normaliza antes da UI. */
+export function normalizeStatusPayload(raw: unknown): StatusPayload {
+  if (!raw || typeof raw !== "object") {
+    return {
+      connected: false,
+      status_text: "",
+      active_screen: "Local",
+      uptime_secs: 0,
+    };
+  }
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && !Number.isNaN(v) ? v : undefined;
+  return {
+    connected: Boolean(r.connected),
+    status_text: String(r.status_text ?? r.statusText ?? ""),
+    peer_hostname: (r.peer_hostname ?? r.peerHostname) as string | undefined,
+    peer_addr: (r.peer_addr ?? r.peerAddr) as string | undefined,
+    latency_ms: num(r.latency_ms ?? r.latencyMs),
+    active_screen: String(r.active_screen ?? r.activeScreen ?? "Local"),
+    uptime_secs: Number(r.uptime_secs ?? r.uptimeSecs ?? 0),
+  };
 }
 
 type StatusHandler = (status: StatusPayload) => void;
@@ -38,21 +63,28 @@ export async function initStatusListener(): Promise<() => void> {
   // Polling constante: garante UI alinhada ao backend mesmo se o evento Tauri falhar
   pollId = setInterval(async () => {
     try {
-      const status = await invoke<StatusPayload>('get_status');
-      handlers.forEach(h => h(status));
-    } catch { /* fora do Tauri */ }
+      const raw = await invoke<unknown>("get_status");
+      const status = normalizeStatusPayload(raw);
+      handlers.forEach((h) => h(status));
+    } catch {
+      /* fora do Tauri */
+    }
   }, 2000);
 
   // Evento em tempo real quando o Rust emite (complementa o polling)
-  await onEvent<StatusPayload>('movex://status-changed', (status) => {
-    handlers.forEach(h => h(status));
+  await onEvent<unknown>("movex://status-changed", (raw) => {
+    const status = normalizeStatusPayload(raw);
+    handlers.forEach((h) => h(status));
   });
 
-  // Carregar estado inicial
+  // Carregar estado inicial (handlers já devem estar registados — ver Dashboard)
   try {
-    const status = await invoke<StatusPayload>('get_status');
-    handlers.forEach(h => h(status));
-  } catch { /* fora do Tauri */ }
+    const raw = await invoke<unknown>("get_status");
+    const status = normalizeStatusPayload(raw);
+    handlers.forEach((h) => h(status));
+  } catch {
+    /* fora do Tauri */
+  }
 
   // Retornar cleanup
   return () => {

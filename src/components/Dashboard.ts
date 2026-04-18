@@ -1,9 +1,15 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { addLog, clearLogs } from "./Logs";
 import { initScreenBorder } from "./ScreenBorder";
 import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
-import { initStatusListener, onStatusChange, startApprovalPolling, cleanupStatusHandlers } from "./ConnectionStatus";
+import {
+  initStatusListener,
+  onStatusChange,
+  startApprovalPolling,
+  cleanupStatusHandlers,
+  normalizeStatusPayload,
+} from "./ConnectionStatus";
 import { cleanupAllListeners } from "../utils/tauri-events";
 
 function esc(s: string): string {
@@ -29,6 +35,8 @@ interface StatusPayload {
   connected: boolean;
   status_text: string;
   peer_hostname?: string;
+  /** Endereço do peer quando conectado (ex.: 192.168.1.5:24800). */
+  peer_addr?: string;
   latency_ms?: number;
   active_screen: string;
   uptime_secs: number;
@@ -42,6 +50,9 @@ interface PeerInfo {
 
 interface SettingsPayload {
   hostname: string;
+  screen_name?: string;
+  expected_client_screen_name?: string | null;
+  launch_connection_on_startup?: boolean;
   role: string;
   peer_position: string;
   setup_complete: boolean;
@@ -87,7 +98,7 @@ export async function renderDashboard(): Promise<void> {
         </nav>
 
         <div class="sidebar-footer">
-          <button class="btn-add">
+          <button type="button" class="btn-add" id="btnAddMachine" title="Abre Dispositivos e conexão por IP">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Adicionar Máquina
           </button>
@@ -137,14 +148,16 @@ export async function renderDashboard(): Promise<void> {
                     <div style="width:24px;height:16px;border-radius:4px;background:var(--cyan);border:1px solid var(--cyan);"></div>
                     <div style="width:24px;height:16px;border-radius:4px;background:var(--cyan);border:1px solid var(--cyan);"></div>
                   </div>
-                  <span style="font-size:13px;color:var(--text-2);" id="nodesLabel">3 Nós Ativos Conectados</span>
+                  <span style="font-size:13px;color:var(--text-2);" id="nodesLabel">Esta máquina · obtendo endereço…</span>
                 </div>
               </div>
               <div style="display:flex;flex-direction:column;gap:12px;">
                 <div class="card">
                   <div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;">Rede <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="1.8"><path d="M5 12.55a11 11 0 0114.08 0"/><circle cx="12" cy="20" r="1" fill="var(--cyan)"/></svg></div>
                   <div style="font-size:30px;font-weight:700;color:var(--text);line-height:1;letter-spacing:-1px;">1.2<span style="font-size:14px;color:var(--text-2);margin-left:4px;">Gbps</span></div>
-                  <div style="font-size:11px;color:var(--text-3);margin-top:6px;">Vazão contínua</div>
+                  <div style="font-size:11px;color:var(--text-3);margin-top:6px;">Vazão contínua (estimativa)</div>
+                  <div style="font-size:11px;color:var(--cyan);margin-top:10px;line-height:1.45;font-family:'JetBrains Mono',monospace;word-break:break-all;" id="panelLocalIpLine">—</div>
+                  <div style="font-size:10px;color:var(--text-2);margin-top:6px;line-height:1.4;display:none;" id="panelPeerLine"></div>
                 </div>
                 <div class="card">
                   <div style="font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Latência</div>
@@ -159,11 +172,12 @@ export async function renderDashboard(): Promise<void> {
                 <div>
                   <div class="section-title">Matriz de Telas</div>
                   <div class="section-sub">Clique nas setas para definir a posição do outro monitor</div>
+                  <div id="panelConnStatus" style="font-size:12px;font-weight:600;color:var(--text-2);margin-top:8px;min-height:18px;">Desconectado</div>
                 </div>
                 <div style="display:flex;gap:10px;">
-                  <button class="btn btn-outline" id="btnSendFile">📁 Enviar Arquivo</button>
-                  <button class="btn btn-outline" id="btnDisconnect" style="display:none;">Desconectar</button>
-                  <button class="btn btn-cyan" id="btnConnect">Conectar</button>
+                  <button type="button" class="btn btn-outline" id="btnSendFile">📁 Enviar Arquivo</button>
+                  <button type="button" class="btn btn-outline" id="btnDisconnect" style="display:none;">Desconectar</button>
+                  <button type="button" class="btn btn-cyan" id="btnConnect">Conectar</button>
                 </div>
               </div>
               <!-- Seletor visual de posição do peer -->
@@ -198,27 +212,29 @@ export async function renderDashboard(): Promise<void> {
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
               <div>
                 <div class="section-title">Dispositivos</div>
-                <div class="section-sub" id="deviceSubtitle">Buscando na rede local...</div>
+                <div class="section-sub" id="deviceSubtitle">Carregando esta máquina…</div>
               </div>
               <div style="display:flex;gap:8px;">
-                <button class="btn btn-outline" id="btnRefreshDevices">
+                <button type="button" class="btn btn-outline" id="btnRefreshDevices">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
                   Atualizar
                 </button>
-                <button class="btn btn-cyan" id="btnAddManual">+ Manual</button>
+                <button type="button" class="btn btn-cyan" id="btnAddManual">+ Manual</button>
               </div>
             </div>
 
-            <!-- Modal IP manual -->
-            <div id="manualModal" style="display:none;background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;padding:20px;margin-bottom:16px;">
-              <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Conectar por IP</div>
-              <div style="display:flex;gap:8px;">
-                <input id="manualIp" type="text" placeholder="192.168.1.100" style="flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-                <input id="manualPort" type="number" value="24800" style="width:90px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-                <button class="btn btn-cyan" id="btnConnectManual">Conectar</button>
-                <button class="btn btn-outline" id="btnCloseManual">✕</button>
+            <!-- IP manual: <details> abre/fecha sem depender de JS no WebView -->
+            <details id="manualIpDetails" class="manual-ip-details" style="margin-bottom:16px;background:var(--bg-3);border:1px solid var(--border-c);border-radius:12px;overflow:hidden;">
+              <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text);user-select:none;">Conectar por IP (toque para expandir)</summary>
+              <div style="padding:0 18px 18px;">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <input id="manualIp" type="text" placeholder="192.168.1.100" style="flex:1;min-width:140px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                  <input id="manualPort" type="number" value="24800" style="width:90px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                  <button type="button" class="btn btn-cyan" id="btnConnectManual">Conectar</button>
+                  <button type="button" class="btn btn-outline" id="btnCloseManual">Fechar</button>
+                </div>
               </div>
-            </div>
+            </details>
 
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;" id="deviceGrid"></div>
           </div>
@@ -247,8 +263,8 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:12px;">
-              <button class="btn btn-outline">Gerar Relatório Completo</button>
-              <button class="btn btn-cyan">Reiniciar Diagnósticos</button>
+              <button type="button" class="btn btn-outline" id="btnDiagReport">Gerar Relatório Completo</button>
+              <button type="button" class="btn btn-cyan" id="btnDiagRestart">Reiniciar Diagnósticos</button>
             </div>
           </div>
 
@@ -287,6 +303,27 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
 
+            <!-- Nome do ecrã (comportamento tipo Barrier/Deskflow) -->
+            <div class="card" style="margin-bottom:14px;border-left:3px solid var(--cyan);">
+              <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Nomes dos ecrãs</div>
+              <div style="margin-bottom:12px;">
+                <label for="screenNameInput" style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:6px;">Nome do ecrã neste PC</label>
+                <input id="screenNameInput" type="text" placeholder="Ex.: MacBook-Pro ou PC-Sala"
+                  style="width:100%;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Identifica este computador no handshake (como o «Screen name» no Barrier). Deve coincidir com o que configurar no servidor se usar filtro abaixo.</div>
+              </div>
+              <div id="expectedClientWrap" style="margin-bottom:12px;">
+                <label for="expectedClientScreenInput" style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:6px;">Aceitar só cliente com este nome (opcional)</label>
+                <input id="expectedClientScreenInput" type="text" placeholder="Vazio = qualquer cliente com PSK correta"
+                  style="width:100%;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Apenas no <strong style="color:var(--text-2);">Servidor</strong>: rejeita clientes cujo nome de ecrã não coincide (exato).</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:12px;color:var(--text-2);">
+                <input type="checkbox" id="launchConnectionOnStartup" style="width:16px;height:16px;accent-color:var(--cyan);" />
+                Ligar sessão KVM ao abrir o app (início automático; desligado = como Barrier — usa «Conectar» no painel)
+              </label>
+            </div>
+
             <!-- Porta + Chave -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
               <div class="card">
@@ -310,6 +347,19 @@ export async function renderDashboard(): Promise<void> {
                 </div>
                 <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Obrigatório: a chave deve ser <strong style="color:var(--text-2);">exatamente igual</strong> no servidor e no cliente (copie e cole). Chaves diferentes bloqueiam a conexão.</div>
               </div>
+            </div>
+
+            <!-- Checklist rede (cliente + servidor) -->
+            <div class="card" id="networkChecklistCard" style="margin-bottom:14px;border-left:3px solid var(--cyan);">
+              <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Alinhar a rede</div>
+              <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
+                <li><strong style="color:var(--text);">Servidor:</strong> papel <em>Servidor</em>, depois <strong>Conectar</strong> no painel (fica a escutar na porta).</li>
+                <li><strong style="color:var(--text);">Cliente:</strong> papel <em>Cliente</em>, IP do servidor acima (ou Dispositivos → IP), mesma <strong>porta</strong> e mesma <strong>chave</strong>.</li>
+                <li><strong style="color:var(--text);">Rede:</strong> os dois PCs na mesma LAN (mesmo Wi‑Fi ou cabo no mesmo router).</li>
+                <li><strong style="color:var(--text);">Firewall:</strong> permitir o app Movex na porta TCP (ex.: 24800) nos dois sistemas.</li>
+                <li><strong style="color:var(--text);">Teste rápido:</strong> no cliente, no terminal: <code style="font-size:11px;color:var(--cyan);">ping &lt;IP-do-servidor&gt;</code> — se não houver resposta, o Movex também não alcança.</li>
+              </ol>
+              <div style="font-size:11px;color:var(--text-3);margin-top:10px;">Se ficar «Timeout» ou «Reconectando», use <strong>Desconectar</strong>, confira o IP e o servidor, depois <strong>Conectar</strong> de novo.</div>
             </div>
 
             <!-- SSL + Clipboard + Tema + Lock -->
@@ -495,6 +545,11 @@ export async function renderDashboard(): Promise<void> {
       updateLockButton?.();
       updateThemeButtons?.();
     }
+    if (page === 'dispositivos') {
+      queueMicrotask(() => {
+        void refreshDevices();
+      });
+    }
   };
 
   // Navegação da sidebar
@@ -561,39 +616,89 @@ export async function renderDashboard(): Promise<void> {
     movexLocalIpv4Cache = '';
   }
 
-  // ── Inicializar módulos com cleanup ────────────────────────────────────────
-  await initScreenBorder();
-  await initFileTransfer();
-  const stopStatusPolling   = await initStatusListener();
-  const stopApprovalPolling = startApprovalPolling(
-    (hostname) => showApprovalModal(hostname),
-    ()         => hideApprovalModal(),
-  );
-
-  // Expor cleanup global (usado no reset de configurações)
-  (window as any).__movexCleanup = () => {
-    stopStatusPolling();
-    stopApprovalPolling();
-    cleanupFileTransfer();
-    cleanupAllListeners();
-    cleanupStatusHandlers();
-    // Limpar countdown de aprovação se modal ainda estiver aberto
-    if (approvalCountdownTimer) {
-      clearInterval(approvalCountdownTimer);
-      approvalCountdownTimer = null;
+  const paintPanelNetworkImmediate = () => {
+    const port = cachedSettings?.port ?? 24800;
+    const localLine = formatLocalNetworkLine(port, movexLocalIpv4Cache);
+    const lip = document.getElementById('panelLocalIpLine');
+    if (lip) lip.textContent = localLine;
+    const nodesSummary = document.getElementById('nodesLabel');
+    if (nodesSummary) {
+      const parts = movexLocalIpv4Cache.split(' · ').filter(Boolean);
+      nodesSummary.textContent =
+        parts.length > 0
+          ? `Esta máquina · ${parts.length} IPv4 na LAN · aguardando par`
+          : 'Esta máquina · IPv4 não detectado (rede ou permissões)';
     }
   };
+  paintPanelNetworkImmediate();
 
-  // Delegar status updates para o módulo ConnectionStatus
+  let stopStatusPolling: () => void = () => {};
+
+  // Handlers registados ANTES de initStatusListener — o primeiro get_status já preenche IP/latência
   onStatusChange(async (status) => {
-    const settings = cachedSettings;
-    if (!settings) return; // ainda carregando
+    let settings = cachedSettings;
+    if (!settings) {
+      await refreshSettings();
+      settings = cachedSettings;
+    }
+    {
+      const line = document.getElementById('panelConnStatus');
+      if (line) {
+        const t = (status.status_text ?? '').trim();
+        line.textContent = t || (status.connected ? 'Conectado' : 'Desconectado');
+        const waiting = /aguardando|conectando|aprovação|reconect/i.test(t);
+        line.style.color = status.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
+      }
+    }
     try {
-      updateScreenMap(settings, status);
+      try {
+        const ips = await invoke<string[]>('get_local_ipv4_addrs');
+        movexLocalIpv4Cache = ips?.length ? ips.join(' · ') : '';
+      } catch {
+        /* ignora */
+      }
+
+      const port = settings?.port ?? 24800;
+      const localLine = formatLocalNetworkLine(port, movexLocalIpv4Cache);
+      const localIpLine = document.getElementById('panelLocalIpLine');
+      if (localIpLine) {
+        localIpLine.textContent = localLine;
+      }
+
+      const peerLine = document.getElementById('panelPeerLine');
+      if (peerLine) {
+        if (status.connected && (status.peer_hostname || status.peer_addr)) {
+          peerLine.style.display = 'block';
+          const host = status.peer_hostname ?? 'Par';
+          const addr = status.peer_addr?.trim();
+          peerLine.textContent = addr ? `${host} · ${addr}` : host;
+        } else {
+          peerLine.style.display = 'none';
+          peerLine.textContent = '';
+        }
+      }
+
+      const nodesSummary = document.getElementById('nodesLabel');
+      if (nodesSummary && !status.connected) {
+        const parts = movexLocalIpv4Cache.split(' · ').filter(Boolean);
+        nodesSummary.textContent =
+          parts.length > 0
+            ? `Esta máquina · ${parts.length} IPv4 na LAN · aguardando par`
+            : 'Esta máquina · IPv4 não detectado (rede ou permissões)';
+      }
+
+      const settingsForMap = settings ?? cachedSettings;
+      if (settingsForMap) {
+        updateScreenMap(settingsForMap, status);
+      }
       const latEl = document.getElementById('latencyVal');
       if (latEl) {
         if (status.connected && status.latency_ms != null) {
-          latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
+          if (status.latency_ms > 0) {
+            latEl.innerHTML = `${status.latency_ms}<span style="font-size:14px;color:var(--text-2);margin-left:4px;">ms</span>`;
+          } else {
+            latEl.innerHTML = `<span style="color:var(--text-3);font-size:20px;">medição…</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span>`;
+          }
         } else {
           latEl.innerHTML = `<span style="color:var(--text-3);">--</span><span style="font-size:14px;color:var(--text-3);margin-left:4px;">ms</span>`;
         }
@@ -613,14 +718,17 @@ export async function renderDashboard(): Promise<void> {
         btnConnect.style.display = status.connected ? 'none' : 'inline-flex';
         btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
       }
-      updateDevices(status, settings);
+      updateDevices(status, settings ?? null);
       // Mostrar seletor de posição quando conectado
       const posSelector = document.getElementById('peerPositionSelector');
       if (posSelector) posSelector.style.display = status.connected ? 'block' : 'none';
       // Borda luminosa — cliente ativo
-      const isClient = settings.role === 'client';
-      const isRemoteActive = status.active_screen === 'Remote';
-      invoke('set_screen_border', { active: isClient && isRemoteActive && status.connected, color: '#00d4ff' }).catch(() => {});
+      {
+        const role = settings?.role ?? 'server';
+        const isClient = role === 'client';
+        const isRemoteActive = status.active_screen === 'Remote';
+        invoke('set_screen_border', { active: isClient && isRemoteActive && status.connected, color: '#00d4ff' }).catch(() => {});
+      }
       // Stats
       try {
         const stats = await invoke<any>('get_stats');
@@ -635,7 +743,10 @@ export async function renderDashboard(): Promise<void> {
         const totalFiles = (stats.files_sent ?? 0) + (stats.files_received ?? 0);
         // Painel principal
         const nodesEl = document.getElementById('nodesLabel');
-        if (nodesEl && status.connected) nodesEl.textContent = `2 Nós Conectados · ${bytes(total)} transferidos`;
+        if (nodesEl && status.connected) {
+          const peerHint = status.peer_addr ? ` · ${status.peer_addr}` : '';
+          nodesEl.textContent = `2 nós ativos${peerHint} · ${bytes(total)} transferidos`;
+        }
         // Aba Segurança — dados reais
         const bytesEl = document.getElementById('bytesTransferred');
         if (bytesEl) bytesEl.textContent = bytes(total);
@@ -665,8 +776,41 @@ export async function renderDashboard(): Promise<void> {
           `).join('');
         }
       } catch { /* sem transferências */ }
-    } catch { /* fora do Tauri */ }
+    } catch (err) {
+      console.warn('[Movex] atualização do painel:', err);
+    }
   });
+
+  try {
+    await initScreenBorder();
+    await initFileTransfer();
+    stopStatusPolling = await initStatusListener();
+  } catch (e) {
+    console.warn("[Movex] Inicialização Tauri (eventos/status) — modo browser ou API indisponível:", e);
+    addLog(
+      isTauri()
+        ? "Parte da integração nativa não iniciou; reinicie a app se o painel ficar estranho."
+        : "Modo pré-visualização: abra pelo app Movex (Tauri), não só pelo navegador em localhost — os botões de conexão precisam do backend.",
+      "warn",
+    );
+  }
+
+  const stopApprovalPolling = startApprovalPolling(
+    (hostname) => showApprovalModal(hostname),
+    ()         => hideApprovalModal(),
+  );
+
+  (window as any).__movexCleanup = () => {
+    stopStatusPolling();
+    stopApprovalPolling();
+    cleanupFileTransfer();
+    cleanupAllListeners();
+    cleanupStatusHandlers();
+    if (approvalCountdownTimer) {
+      clearInterval(approvalCountdownTimer);
+      approvalCountdownTimer = null;
+    }
+  };
 
   // wrapper de cache será instalado após saveConfig ser definido
 
@@ -699,6 +843,15 @@ export async function renderDashboard(): Promise<void> {
 
       const portInput = document.getElementById('portInput') as HTMLInputElement;
       if (portInput) portInput.value = String(s.port ?? 24800);
+
+      const screenEl = document.getElementById('screenNameInput') as HTMLInputElement;
+      if (screenEl) screenEl.value = s.screen_name ?? s.hostname ?? '';
+
+      const expEl = document.getElementById('expectedClientScreenInput') as HTMLInputElement;
+      if (expEl) expEl.value = s.expected_client_screen_name ?? '';
+
+      const launchEl = document.getElementById('launchConnectionOnStartup') as HTMLInputElement;
+      if (launchEl) launchEl.checked = !!s.launch_connection_on_startup;
     } catch { /* fora do Tauri */ }
   };
 
@@ -766,8 +919,16 @@ export async function renderDashboard(): Promise<void> {
     const keyVal = (document.getElementById('keyInput') as HTMLInputElement)?.value.trim();
     try {
       const s = await invoke<any>('get_settings');
+      const screenName =
+        (document.getElementById('screenNameInput') as HTMLInputElement)?.value?.trim() || s.hostname;
+      const expectedRaw =
+        (document.getElementById('expectedClientScreenInput') as HTMLInputElement)?.value?.trim() || '';
       await invoke('save_settings', {
         hostname: s.hostname,
+        screenName,
+        expectedClientScreenName: expectedRaw ? expectedRaw : null,
+        launchConnectionOnStartup:
+          (document.getElementById('launchConnectionOnStartup') as HTMLInputElement)?.checked ?? false,
         role: currentRole,
         serverAddr: (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null,
         port,
@@ -789,11 +950,74 @@ export async function renderDashboard(): Promise<void> {
   // Carregar configurações atuais ao abrir a página
   await loadCurrentSettings();
 
-  document.getElementById('btnConnect')?.addEventListener('click', async () => {
-    addLog("Iniciando conexão...", "info");
-    await invoke('start_connection').catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
+  const setManualIpDetailsOpen = (open: boolean) => {
+    const el = document.getElementById('manualIpDetails') as HTMLDetailsElement | null;
+    if (el) el.open = open;
+  };
+
+  /** Abre a aba Dispositivos e expande o bloco «Conectar por IP» (details nativo do browser). */
+  const revealManualIpForm = () => {
+    navTo('dispositivos');
+    setManualIpDetailsOpen(true);
+    setTimeout(() => {
+      (document.getElementById('manualIp') as HTMLInputElement | null)?.focus();
+    }, 200);
+  };
+
+  const handlePanelConnect = async () => {
+    const lineEl = document.getElementById('panelConnStatus');
+    if (!isTauri()) {
+      const msg =
+        'Abra o Movex pela aplicação instalada (janela nativa). No navegador (localhost) não há backend Tauri.';
+      addLog(msg, 'warn');
+      if (lineEl) {
+        lineEl.textContent = msg;
+        lineEl.style.color = 'var(--warn)';
+      }
+      return;
+    }
+    await refreshSettings();
+    const s = cachedSettings as { role?: string; server_addr?: string | null } | null;
+    const role = (s?.role ?? 'server').toLowerCase();
+    const serverAddr = (s?.server_addr ?? '').trim();
+    if (role === 'client' && !serverAddr) {
+      addLog('Cliente: informe o IP do servidor (aba Dispositivos) ou em Configurações.', 'warn');
+      revealManualIpForm();
+      if (lineEl) {
+        lineEl.textContent = 'Defina o IP do servidor (Dispositivos)';
+        lineEl.style.color = 'var(--warn)';
+      }
+      return;
+    }
+    addLog('Iniciando conexão…', 'info');
+    if (lineEl) {
+      lineEl.textContent = 'A iniciar…';
+      lineEl.style.color = 'var(--cyan)';
+    }
+    await invoke('start_connection').catch((e: unknown) => {
+      addLog(`Erro: ${e}`, 'warn');
+      if (lineEl) {
+        lineEl.textContent = `Erro: ${e}`;
+        lineEl.style.color = 'var(--warn)';
+      }
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      const raw = await invoke<unknown>('get_status');
+      const st = normalizeStatusPayload(raw);
+      const el = document.getElementById('panelConnStatus');
+      if (el) {
+        const t = (st.status_text ?? '').trim();
+        el.textContent = t || 'A iniciar…';
+        const waiting = /aguardando|conectando|aprovação|reconect/i.test(t);
+        el.style.color = st.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
+      }
+    } catch {
+      /* get_status pode falhar fora do Tauri */
+    }
     navTo('painel');
-  });
+  };
+  document.getElementById('btnConnect')?.addEventListener('click', () => void handlePanelConnect());
 
   // Drag-and-drop, borda luminosa e status → módulos FileTransfer, ScreenBorder, ConnectionStatus
 
@@ -880,6 +1104,9 @@ export async function renderDashboard(): Promise<void> {
     }
     await invoke('save_settings', {
       hostname: cachedSettings.hostname,
+      screenName: cachedSettings.screen_name ?? cachedSettings.hostname,
+      expectedClientScreenName: cachedSettings.expected_client_screen_name ?? null,
+      launchConnectionOnStartup: !!cachedSettings.launch_connection_on_startup,
       role: cachedSettings.role,
       serverAddr: cachedSettings.server_addr ?? null,
       port: cachedSettings.port,
@@ -1054,6 +1281,12 @@ export async function renderDashboard(): Promise<void> {
       subtitle.textContent = `${peers.length} dispositivo(s) encontrado(s)`;
       addLog(`Descoberta concluída: ${peers.length} peer(s)`, peers.length > 0 ? 'sec' : 'info');
       renderDiscoveredDevices(peers);
+      try {
+        const raw = await invoke<unknown>('get_status');
+        updateDevices(normalizeStatusPayload(raw), cachedSettings ?? null);
+      } catch {
+        /* ignora */
+      }
     } catch (e) {
       subtitle.textContent = 'Erro na descoberta';
       addLog(`Erro na descoberta mDNS: ${e}`, 'warn');
@@ -1062,9 +1295,9 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
-  const addManualDevice = () => {
-    const modal = document.getElementById('manualModal')!;
-    modal.style.display = modal.style.display === 'none' ? 'block' : 'none';
+  const openManualIpFromToolbar = () => {
+    revealManualIpForm();
+    addLog('Conectar por IP: preencha o endereço do servidor Movex.', 'info');
   };
 
   const goToPainel = () => navTo('painel');
@@ -1074,7 +1307,7 @@ export async function renderDashboard(): Promise<void> {
     const port = parseInt((document.getElementById('manualPort') as HTMLInputElement).value) || 24800;
     if (!ip) { addLog("Digite um endereço IP", 'warn'); return; }
     addLog(`Conectando a ${ip}:${port}...`, 'info');
-    document.getElementById('manualModal')!.style.display = 'none';
+    setManualIpDetailsOpen(false);
     await invoke('connect_to_peer', { addr: ip, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
     goToPainel();
   };
@@ -1084,13 +1317,21 @@ export async function renderDashboard(): Promise<void> {
     await invoke('connect_to_peer', { addr, port }).catch((e: unknown) => addLog(`Erro: ${e}`, 'warn'));
     goToPainel();
   };
-  // Auto-descoberta
-  setTimeout(async () => {
-    try {
-      const status = await invoke<StatusPayload>('get_status');
-      if (!status.connected) refreshDevices();
-    } catch { /* fora do Tauri */ }
-  }, 1500);
+
+  /** Fluxo «Adicionar Máquina»: Dispositivos + formulário IP + busca na rede. */
+  const addNewMachine = () => {
+    revealManualIpForm();
+    void refreshDevices();
+    addLog('Adicionar máquina: use o IP abaixo ou um computador listado após «Atualizar».', 'info');
+    setTimeout(() => {
+      (document.getElementById('manualIp') as HTMLInputElement | null)?.focus();
+    }, 200);
+  };
+
+  // Busca inicial na rede (não depende só do poll de status)
+  setTimeout(() => {
+    void refreshDevices();
+  }, 1200);
 
   document.getElementById('cmdInput')?.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
@@ -1108,15 +1349,15 @@ export async function renderDashboard(): Promise<void> {
 
   on('btnSendFile',        sendFileDialog);
   on('btnDisconnect',      doDisconnect);
-  on('btnConnect',         addManualDevice);
+  // btnConnect: só handlePanelConnect (acima) — não usar addManualDevice aqui
   on('pos-above',          () => setPeerPosition('above'));
   on('pos-left',           () => setPeerPosition('left'));
   on('pos-right',          () => setPeerPosition('right'));
   on('pos-below',          () => setPeerPosition('below'));
   on('btnRefreshDevices',  refreshDevices);
-  on('btnAddManual',       addManualDevice);
+  on('btnAddManual',       openManualIpFromToolbar);
   on('btnConnectManual',   connectManual);
-  on('btnCloseManual',     () => { const m = document.getElementById('manualModal'); if (m) m.style.display = 'none'; });
+  on('btnCloseManual',     () => setManualIpDetailsOpen(false));
   on('btnCopyLogs',        copyLogs);
   on('btnClearLogs',       () => clearLogs());
   on('btnApplyServerAddr', applyServerAddr);
@@ -1132,6 +1373,9 @@ export async function renderDashboard(): Promise<void> {
   on('btnSaveConfig',      saveConfigAndRefresh);
   on('btnApproveConn',     approveConn);
   on('btnRejectConn',      rejectConn);
+  on('btnAddMachine',      addNewMachine);
+  on('btnDiagReport',      () => addLog('Relatório completo: em desenvolvimento (use os logs abaixo para diagnóstico).', 'info'));
+  on('btnDiagRestart',     () => addLog('Reinício de diagnósticos: apenas registo no log (sem ação no sistema).', 'info'));
 
   // Cards de papel (servidor/cliente) — usar referência direta
   document.querySelectorAll('[data-role]').forEach(el => {
@@ -1140,6 +1384,17 @@ export async function renderDashboard(): Promise<void> {
 
   // Atualizar referência global para loadRecentPeers (usado em renderDeviceCards)
   (window as any).connectToPeer = connectToPeer;
+
+  void (async () => {
+    try {
+      const raw = await invoke<unknown>('get_status');
+      const st = normalizeStatusPayload(raw);
+      if (!cachedSettings) await refreshSettings();
+      updateDevices(st, cachedSettings ?? null);
+    } catch (e) {
+      console.warn('[Movex] sync inicial dispositivos:', e);
+    }
+  })();
 }
 
 // updateStatus foi substituído por onStatusChange no módulo ConnectionStatus
@@ -1171,7 +1426,8 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
     return card;
   };
 
-  map.appendChild(makeCard(true,  settings.hostname,                        isActive,  false));
+  const localLabel = (settings.screen_name?.trim() || settings.hostname).trim();
+  map.appendChild(makeCard(true, localLabel, isActive, false));
   const arrow = document.createElement('div');
   arrow.style.cssText = 'color:var(--text-3);font-size:20px;';
   arrow.textContent = '⇄';
@@ -1179,11 +1435,13 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
   map.appendChild(makeCard(false, status.peer_hostname ?? 'Aguardando...', !isActive && status.connected, status.connected));
 }
 
-function updateDevices(status: StatusPayload, settings: SettingsPayload) {
+function updateDevices(status: StatusPayload, settings: SettingsPayload | null) {
   const grid = document.getElementById('deviceGrid');
   if (!grid) return;
 
-  const port = typeof (settings as { port?: number }).port === 'number'
+  const hostname =
+    settings?.screen_name?.trim() || settings?.hostname?.trim() || 'Este computador';
+  const port = settings && typeof (settings as { port?: number }).port === 'number'
     ? (settings as { port: number }).port
     : 24800;
   const localIpText = formatLocalNetworkLine(port, movexLocalIpv4Cache);
@@ -1192,10 +1450,10 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
   if (status.connected) {
     grid.dataset.discovered = 'false'; // permite atualizar
     const devices = [
-      { name: settings.hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+      { name: hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
       {
         name: status.peer_hostname ?? 'Peer',
-        ip: '● Conectado agora',
+        ip: status.peer_addr?.trim() ? `● ${status.peer_addr}` : '● Conectado agora',
         icon: '💻',
         online: true,
         addr: null as string|null,
@@ -1212,12 +1470,16 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload) {
   // Se não conectado e grid já foi preenchida pela descoberta mDNS, não sobrescrever
   if (grid.dataset.discovered === 'true') return;
 
-  // Mostrar apenas a máquina local enquanto desconectado
+  // Mostrar sempre a máquina local (mesmo sem get_settings ainda)
   const devices = [
-    { name: settings.hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
+    { name: hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
   ];
   grid.innerHTML = '';
   renderDeviceCards(grid, devices);
+  const subtitle = document.getElementById('deviceSubtitle');
+  if (subtitle) {
+    subtitle.textContent = `${hostname} · ${localIpText} · «Atualizar» para buscar outros PCs`;
+  }
 }
 
 function renderDiscoveredDevices(peers: PeerInfo[]) {

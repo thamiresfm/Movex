@@ -7,4 +7,8 @@ package-lock.json
 # Cópias locais de backup (não versionar)
 **/*.old.rs
 **/*.old.ts
+**/*.ts.old
+**/*.rs.old
+**/*.old.md
+**/*.old.css
 **/*.bak-*

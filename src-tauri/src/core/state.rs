@@ -16,7 +16,12 @@ pub enum ConnectionStatus {
     Connecting,
     /// Handshake autenticado — aguardando aprovação do usuário local
     PendingApproval { peer_hostname: String },
-    Connected { peer_hostname: String, latency_ms: u32 },
+    Connected {
+        peer_hostname: String,
+        /// Endereço de rede do peer (ex.: `192.168.1.10:24800`).
+        peer_addr: String,
+        latency_ms: u32,
+    },
     Reconnecting { attempt: u32 },
 }
 
@@ -29,8 +34,16 @@ impl std::fmt::Display for ConnectionStatus {
             Self::PendingApproval { peer_hostname } => {
                 write!(f, "Aguardando aprovação de {}", peer_hostname)
             }
-            Self::Connected { peer_hostname, latency_ms } => {
-                write!(f, "Conectado a {} ({}ms)", peer_hostname, latency_ms)
+            Self::Connected {
+                peer_hostname,
+                peer_addr,
+                latency_ms,
+            } => {
+                write!(
+                    f,
+                    "Conectado a {} @ {} ({}ms)",
+                    peer_hostname, peer_addr, latency_ms
+                )
             }
             Self::Reconnecting { attempt } => {
                 write!(f, "Reconectando... (tentativa {})", attempt)

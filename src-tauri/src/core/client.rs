@@ -89,17 +89,18 @@ pub async fn connect_to_addr(
         }
     }
 
-    let (hostname, psk_hex) = {
+    let (screen_name, psk_hex) = {
         let s = state.settings.lock().await;
-        (s.hostname.clone(), s.psk_hex.clone())
+        (s.screen_name.clone(), s.psk_hex.clone())
     };
 
-    if let Ok(peer_hostname) = do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await {
+    if let Ok(peer_hostname) = do_handshake(&mut tls, &screen_name, &psk_hex, &state, &cancel).await {
         info!("Conectado (sessão) a: {}", peer_hostname);
         {
             let mut status = state.connection_status.lock().await;
             *status = ConnectionStatus::Connected {
                 peer_hostname: peer_hostname.clone(),
+                peer_addr: target.clone(),
                 latency_ms: 0,
             };
             let mut started = state.session_started_at.lock().await;
@@ -121,11 +122,11 @@ pub async fn connect_to_addr(
     { *state.session_server_addr.lock().await = None; }
 }
 
-/// Executa o handshake HMAC com o servidor e retorna o hostname do peer.
+/// Executa o handshake HMAC com o servidor e retorna o nome de ecrã do peer (servidor).
 /// Retorna `Err` para qualquer falha — o chamador decide se reconecta ou não.
 async fn do_handshake<S>(
     stream: &mut S,
-    hostname: &str,
+    screen_name: &str,
     psk_hex: &str,
     state: &SharedState,
     cancel: &CancellationToken,
@@ -148,7 +149,7 @@ where
     let hmac = crate::core::auth::compute_hmac(psk_hex, &challenge);
     if let Err(e) = send_message(stream, &Message::Hello {
         version: PROTOCOL_VERSION,
-        hostname: hostname.to_string(),
+        hostname: screen_name.to_string(),
         hmac,
     }).await {
         warn!("Erro ao enviar Hello: {}", e);
@@ -171,6 +172,13 @@ where
     };
 
     match resolved {
+        Ok(Message::HelloReject { reason }) => {
+            warn!("Servidor rejeitou o handshake: {}", reason);
+            state
+                .send_notification("Movex — Nome do ecrã", &reason)
+                .await;
+            Err(())
+        }
         Ok(Message::ConnectionRejected { reason }) => {
             warn!("Conexão rejeitada pelo servidor: {}", reason);
             {
@@ -206,6 +214,8 @@ where
 /// Conecta ao servidor com reconexão automática e suporte a cancelamento.
 pub async fn connect(state: SharedState, cancel: CancellationToken) {
     let policy = ReconnectPolicy::default();
+    // Falhas seguidas só de TCP (timeout / recusado) — notificação na 3.ª falha.
+    let mut tcp_unreachable_streak: u32 = 0;
 
     loop {
         let (maybe_addr, port) = {
@@ -257,6 +267,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
 
         match connect_result {
             Ok(Ok(tcp)) => {
+                tcp_unreachable_streak = 0;
                 let known_fp = state.settings.lock().await.server_cert_fingerprint.clone();
                 let (connector, tofu_verifier) = create_tls_connector(known_fp);
                 let domain = ServerName::try_from("movex.local").expect("domínio inválido");
@@ -272,13 +283,13 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             }
                         }
 
-                        let (hostname, psk_hex) = {
+                        let (screen_name, psk_hex) = {
                             let s = state.settings.lock().await;
-                            (s.hostname.clone(), s.psk_hex.clone())
+                            (s.screen_name.clone(), s.psk_hex.clone())
                         };
 
                         if let Ok(peer_hostname) =
-                            do_handshake(&mut tls, &hostname, &psk_hex, &state, &cancel).await
+                            do_handshake(&mut tls, &screen_name, &psk_hex, &state, &cancel).await
                         {
                             info!("Conectado ao servidor: {}", peer_hostname);
                             policy.reset();
@@ -286,6 +297,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                                 let mut status = state.connection_status.lock().await;
                                 *status = ConnectionStatus::Connected {
                                     peer_hostname: peer_hostname.clone(),
+                                    peer_addr: addr.clone(),
                                     latency_ms: 0,
                                 };
                                 let mut started = state.session_started_at.lock().await;
@@ -317,10 +329,28 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             }
             Ok(Err(e)) => {
                 warn!("Falha ao conectar em {}: {}", addr, e);
+                tcp_unreachable_streak = tcp_unreachable_streak.saturating_add(1);
+                if tcp_unreachable_streak == 3 {
+                    state
+                        .send_notification(
+                            "Movex — Não alcança o servidor",
+                            "Confira: (1) Outro PC em modo Servidor e Conectar. (2) Mesma rede. (3) Firewall permite a porta TCP. (4) IP correto em Configurações. (5) Abra Configurações → «Alinhar a rede».",
+                        )
+                        .await;
+                }
                 crate::emit_status_to_main(&state).await;
             }
             Err(_) => {
                 warn!("Timeout ao conectar em {}", addr);
+                tcp_unreachable_streak = tcp_unreachable_streak.saturating_add(1);
+                if tcp_unreachable_streak == 3 {
+                    state
+                        .send_notification(
+                            "Movex — Timeout na rede",
+                            "Confira: (1) Outro PC em modo Servidor e Conectar. (2) Mesma rede Wi‑Fi/LAN. (3) Firewall. (4) IP do servidor. (5) Veja Configurações → «Alinhar a rede».",
+                        )
+                        .await;
+                }
                 crate::emit_status_to_main(&state).await;
             }
         }
@@ -472,6 +502,8 @@ async fn run_session<S>(
                             if let ConnectionStatus::Connected { ref mut latency_ms, .. } = *status {
                                 *latency_ms = rtt;
                             }
+                            drop(status);
+                            crate::emit_status_to_main(&state).await;
                         }
                     }
                     Ok(Message::Disconnect { reason }) => {

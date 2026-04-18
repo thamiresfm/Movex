@@ -56,6 +56,17 @@ pub struct RecentPeer {
 pub struct Settings {
     pub schema_version: u32,
     pub hostname: String,
+    /// Nome do ecrã neste PC (como Barrier/Deskflow: identifica o cliente no handshake).
+    /// Por defeito iguala ao hostname da máquina.
+    #[serde(default)]
+    pub screen_name: String,
+    /// No servidor: se preenchido, só aceita clientes cujo `screen_name` coincida (exato, sem espaços nas pontas).
+    #[serde(default)]
+    pub expected_client_screen_name: Option<String>,
+    /// Se verdadeiro, ao abrir o app com setup completo inicia servidor ou cliente automaticamente.
+    /// Comportamento tipo Barrier: normalmente desligado (utilizador clica em Conectar).
+    #[serde(default)]
+    pub launch_connection_on_startup: bool,
     pub role: Role,
     pub server_addr: Option<String>,
     pub port: u16,
@@ -80,9 +91,13 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
+        let hn = get_hostname();
         Self {
-            schema_version: 4,
-            hostname: get_hostname(),
+            schema_version: 5,
+            hostname: hn.clone(),
+            screen_name: hn,
+            expected_client_screen_name: None,
+            launch_connection_on_startup: false,
             role: Role::default(),
             server_addr: None,
             port: 24800,
@@ -132,6 +147,9 @@ impl Settings {
             match std::fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<Settings>(&content) {
                     Ok(mut s) => {
+                        if s.screen_name.trim().is_empty() {
+                            s.screen_name = s.hostname.clone();
+                        }
                         if s.schema_version < 2 {
                             s.schema_version = 2;
                             s.notifications_enabled = true;
@@ -146,6 +164,14 @@ impl Settings {
                         if s.schema_version < 4 {
                             s.schema_version = 4;
                             s.server_cert_fingerprint = None;
+                            let _ = s.save();
+                        }
+                        if s.schema_version < 5 {
+                            s.schema_version = 5;
+                            s.screen_name = s.hostname.clone();
+                            s.expected_client_screen_name = None;
+                            // Manter o comportamento anterior: quem já usava o app tinha sessão ao abrir
+                            s.launch_connection_on_startup = true;
                             let _ = s.save();
                         }
                         s.lock_mode = false;
@@ -219,7 +245,8 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.port, original.port);
         assert_eq!(restored.psk_hex, original.psk_hex);
-        assert_eq!(restored.schema_version, 4);
+        assert_eq!(restored.schema_version, 5);
+        assert_eq!(restored.screen_name, original.screen_name);
     }
 
     #[test]

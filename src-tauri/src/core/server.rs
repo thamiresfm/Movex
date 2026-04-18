@@ -35,11 +35,11 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
     let acceptor = create_tls_acceptor(certs, key)
         .map_err(|e| format!("Erro ao criar TLS acceptor: {}", e))?;
 
-    let (hostname, mdns_port) = {
+    let (screen_name, mdns_port) = {
         let s = state.settings.lock().await;
-        (s.hostname.clone(), s.port)
+        (s.screen_name.clone(), s.port)
     };
-    let _mdns_daemon = crate::network::discovery::announce_server(&hostname, mdns_port).ok();
+    let _mdns_daemon = crate::network::discovery::announce_server(&screen_name, mdns_port).ok();
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr)
@@ -51,6 +51,7 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Listening;
     }
+    crate::emit_status_to_main(&state).await;
 
     loop {
         tokio::select! {
@@ -90,6 +91,7 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                                 peer_hostname: peer_addr.to_string(),
                             };
                         }
+                        crate::emit_status_to_main(&state).await;
 
                         let state_clone = state.clone();
                         let cancel_clone = cancel.clone();
@@ -118,10 +120,10 @@ async fn handle_client<S>(
 {
     // Handshake: enviar nonce → receber Hello com HMAC → validar PSK
     let server_nonce = hex::encode(rand::random::<[u8; 32]>());
-    let our_hostname_for_challenge = { state.settings.lock().await.hostname.clone() };
+    let our_screen_for_challenge = { state.settings.lock().await.screen_name.clone() };
     if let Err(e) = send_message(&mut stream, &Message::ServerChallenge {
         version: PROTOCOL_VERSION,
-        hostname: our_hostname_for_challenge,
+        hostname: our_screen_for_challenge,
         server_nonce: server_nonce.clone(),
     }).await {
         warn!("Erro ao enviar ServerChallenge para {}: {}", peer_addr, e);
@@ -165,10 +167,29 @@ async fn handle_client<S>(
         }
     };
 
-    let our_hostname = { state.settings.lock().await.hostname.clone() };
+    if let Some(ref expected) = state.settings.lock().await.expected_client_screen_name {
+        let exp = expected.trim();
+        if !exp.is_empty() && peer_hostname.trim() != exp {
+            warn!(
+                "Nome de ecrã do cliente '{}' não coincide com o esperado '{}'",
+                peer_hostname, exp
+            );
+            let _ = send_message(&mut stream, &Message::HelloReject {
+                reason: format!(
+                    "Nome de ecrã do cliente («{}») não coincide com o configurado no servidor («{}»). Ajuste em Configurações (estilo Barrier).",
+                    peer_hostname.trim(),
+                    exp
+                ),
+            }).await;
+            server_resume_listening(&state).await;
+            return;
+        }
+    }
+
+    let our_screen_name = { state.settings.lock().await.screen_name.clone() };
 
     let _ = send_message(&mut stream, &Message::ConnectionPending {
-        hostname: our_hostname.clone(),
+        hostname: our_screen_name.clone(),
     }).await;
 
     let (approval_tx, approval_rx) = tokio::sync::oneshot::channel::<bool>();
@@ -218,7 +239,7 @@ async fn handle_client<S>(
 
     let _ = send_message(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,
-        hostname: our_hostname,
+        hostname: our_screen_name,
     }).await;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
@@ -235,6 +256,7 @@ async fn handle_client<S>(
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Connected {
             peer_hostname: peer_hostname.clone(),
+            peer_addr: peer_addr.to_string(),
             latency_ms: 0,
         };
         let mut started = state.session_started_at.lock().await;
@@ -357,6 +379,8 @@ async fn handle_client<S>(
                             if let ConnectionStatus::Connected { ref mut latency_ms, .. } = *status {
                                 *latency_ms = rtt_ms;
                             }
+                            drop(status);
+                            crate::emit_status_to_main(&state).await;
                         }
                     }
                     Ok(Message::LeaveScreen) => {
