@@ -120,6 +120,27 @@ impl AppState {
         }
     }
 
+    /// Notificação **sempre** (ignora o toggle de notificações) — pedidos de aprovação no servidor, etc.
+    pub async fn notify_always(&self, title: &str, body: &str) {
+        if let Some(app) = self.app_handle.lock().await.as_ref() {
+            crate::core::notifications::notify(app, title, body);
+        }
+    }
+
+    /// Traz a janela principal para a frente (pedido de aprovação, etc.).
+    pub async fn focus_main_window(&self) {
+        use tauri::Manager;
+        let guard = self.app_handle.lock().await;
+        let Some(app) = guard.as_ref() else {
+            return;
+        };
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+
     /// Gera próximo ID de transferência (thread-safe)
     pub async fn next_transfer_id(&self) -> u32 {
         let mut id = self.next_transfer_id.lock().await;

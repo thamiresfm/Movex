@@ -208,10 +208,17 @@ async fn handle_client<S>(
     }
 
     info!("Aguardando aprovação do usuário para conectar: {} ({})", peer_hostname, peer_addr);
-    state.send_notification(
-        "Movex — Solicitação de Conexão",
-        &format!("{} quer controlar este computador", peer_hostname),
-    ).await;
+    // Sempre mostrar toast — mesmo com «notificações» desligadas, senão o utilizador não vê o pedido.
+    state
+        .notify_always(
+            "Movex — Aprovar ligação?",
+            &format!(
+                "{} pede controlo. Na janela do Movex toque em Aprovar ({}s).",
+                peer_hostname, 60
+            ),
+        )
+        .await;
+    state.focus_main_window().await;
 
     let approved = tokio::time::timeout(
         std::time::Duration::from_secs(60),
