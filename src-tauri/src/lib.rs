@@ -958,6 +958,7 @@ pub fn run() {
             set_screen_border,
             permissions::open_system_settings,
             permissions::get_platform_kind,
+            permissions::windows_apply_firewall_rules_for_movex,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

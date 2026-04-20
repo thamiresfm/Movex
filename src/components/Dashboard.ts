@@ -436,10 +436,19 @@ export async function renderDashboard(): Promise<void> {
                 <button type="button" id="btnPermMacInput" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Monitorização de entrada</button>
                 <button type="button" id="btnPermMacNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Notificações</button>
               </div>
-              <div id="permRowWin" style="display:none;flex-wrap:wrap;gap:8px;">
-                <button type="button" id="btnPermWinNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Notificações</button>
-                <button type="button" id="btnPermWinFirewall" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Firewall</button>
-                <button type="button" id="btnPermWinPrivacy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Privacidade</button>
+              <div id="permRowWin" style="display:none;flex-direction:column;gap:10px;">
+                <div style="font-size:10px;color:var(--text-3);line-height:1.45;">
+                  No Windows não existe «permissão máxima» automática: o firewall e políticas de rede exigem administrador (UAC) ou IT.
+                  Use <strong>Aplicar regras</strong> para permitir o Movex na porta configurada; em redes com proxy corporativo, abra <strong>Proxy do sistema</strong>.
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                  <button type="button" id="btnPermWinApplyFw" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Aplicar regras no firewall (admin)</button>
+                  <button type="button" id="btnPermWinFirewallAdv" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Firewall e segurança</button>
+                  <button type="button" id="btnPermWinProxy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Proxy do sistema</button>
+                  <button type="button" id="btnPermWinNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Notificações</button>
+                  <button type="button" id="btnPermWinFirewall" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Firewall (lista clássica)</button>
+                  <button type="button" id="btnPermWinPrivacy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Privacidade</button>
+                </div>
               </div>
             </div>
 
@@ -1053,6 +1062,25 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
+  const applyWindowsFirewallRules = async () => {
+    if (!isTauri()) {
+      addLog('Use a aplicação Movex instalada para aplicar regras de firewall.', 'warn');
+      return;
+    }
+    await refreshSettings();
+    const port = Number((cachedSettings as { port?: number } | null)?.port ?? 24800);
+    if (!Number.isFinite(port) || port < 1 || port > 65535) {
+      addLog('Porta inválida nas configurações.', 'warn');
+      return;
+    }
+    try {
+      const msg = await invoke<string>('windows_apply_firewall_rules_for_movex', { port });
+      addLog(msg, 'sec');
+    } catch (e) {
+      addLog(`Firewall: ${e}`, 'warn');
+    }
+  };
+
   try {
     const plat = await invoke<string>('get_platform_kind');
     const rowMac = document.getElementById('permRowMac');
@@ -1060,6 +1088,7 @@ export async function renderDashboard(): Promise<void> {
     if (rowMac && rowWin) {
       rowMac.style.display = plat === 'macos' ? 'flex' : 'none';
       rowWin.style.display = plat === 'windows' ? 'flex' : 'none';
+      rowWin.style.flexDirection = 'column';
     }
   } catch {
     /* ignorar se o comando não existir */
@@ -1455,6 +1484,9 @@ export async function renderDashboard(): Promise<void> {
   on('btnPermMacAccessibility', () => void openSystemPanel('accessibility'));
   on('btnPermMacInput',    () => void openSystemPanel('input_monitoring'));
   on('btnPermMacNotif',    () => void openSystemPanel('notifications'));
+  on('btnPermWinApplyFw',  () => void applyWindowsFirewallRules());
+  on('btnPermWinFirewallAdv', () => void openSystemPanel('firewall_advanced'));
+  on('btnPermWinProxy',    () => void openSystemPanel('proxy'));
   on('btnPermWinNotif',    () => void openSystemPanel('notifications'));
   on('btnPermWinFirewall', () => void openSystemPanel('firewall'));
   on('btnPermWinPrivacy',  () => void openSystemPanel('privacy'));
