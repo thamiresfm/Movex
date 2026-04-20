@@ -438,8 +438,8 @@ export async function renderDashboard(): Promise<void> {
               </div>
               <div id="permRowWin" style="display:none;flex-direction:column;gap:10px;">
                 <div style="font-size:10px;color:var(--text-3);line-height:1.45;">
-                  No Windows não existe «permissão máxima» automática: o firewall e políticas de rede exigem administrador (UAC) ou IT.
-                  Use <strong>Aplicar regras</strong> para permitir o Movex na porta configurada; em redes com proxy corporativo, abra <strong>Proxy do sistema</strong>.
+                  Na <strong>primeira vez que ligar</strong>, o Movex pede automaticamente o UAC para criar regras no Firewall (aceite «Sim»).
+                  Se recusou antes, use <strong>Aplicar regras no firewall (admin)</strong>. Em proxy corporativo: <strong>Proxy do sistema</strong>.
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;">
                   <button type="button" id="btnPermWinApplyFw" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Aplicar regras no firewall (admin)</button>

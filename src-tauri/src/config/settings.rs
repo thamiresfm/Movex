@@ -87,13 +87,16 @@ pub struct Settings {
     /// Some(fp) = rejeita se o cert apresentado divergir
     #[serde(default)]
     pub server_cert_fingerprint: Option<String>,
+    /// Windows: já foi apresentado o pedido automático de regras no firewall (UAC) na primeira conexão.
+    #[serde(default)]
+    pub windows_firewall_prompt_done: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         let hn = get_hostname();
         Self {
-            schema_version: 5,
+            schema_version: 6,
             hostname: hn.clone(),
             screen_name: hn,
             expected_client_screen_name: None,
@@ -112,6 +115,7 @@ impl Default for Settings {
             recent_peers: vec![],
             lock_mode: false,
             server_cert_fingerprint: None,
+            windows_firewall_prompt_done: false,
         }
     }
 }
@@ -172,6 +176,11 @@ impl Settings {
                             s.expected_client_screen_name = None;
                             // Manter o comportamento anterior: quem já usava o app tinha sessão ao abrir
                             s.launch_connection_on_startup = true;
+                            let _ = s.save();
+                        }
+                        if s.schema_version < 6 {
+                            s.schema_version = 6;
+                            s.windows_firewall_prompt_done = false;
                             let _ = s.save();
                         }
                         s.lock_mode = false;
@@ -245,7 +254,7 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.port, original.port);
         assert_eq!(restored.psk_hex, original.psk_hex);
-        assert_eq!(restored.schema_version, 5);
+        assert_eq!(restored.schema_version, 6);
         assert_eq!(restored.screen_name, original.screen_name);
     }
 

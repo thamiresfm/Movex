@@ -214,6 +214,41 @@ async fn start_connection(state: State<'_, SharedState>) -> Result<(), String> {
     // Cancelar conexão anterior se existir
     state.cancel_connection().await;
 
+    // Windows: na primeira conexão, pedir UAC para regras no Firewall (senão o SO não “pergunta”
+    // e o servidor pode ficar inacessível na LAN). Executa uma vez por instalação/config.
+    #[cfg(target_os = "windows")]
+    {
+        let (port, need_fw, role_hint) = {
+            let s = state.settings.lock().await;
+            (
+                s.port,
+                !s.windows_firewall_prompt_done,
+                s.role.clone(),
+            )
+        };
+        if need_fw {
+            tracing::info!("Windows: a pedir permissão de firewall (UAC) antes da primeira conexão");
+            if let Some(app) = state.app_handle.lock().await.as_ref() {
+                let body = match role_hint {
+                    Role::Server => "Vai abrir o pedido do Windows (UAC). Aceite «Sim» para permitir o Movex na porta da rede (servidor).",
+                    Role::Client => "Vai abrir o pedido do Windows (UAC). Aceite «Sim» para permitir o Movex no Firewall (rede local).",
+                };
+                crate::core::notifications::notify(app, "Movex — Permissão do Windows", body);
+            }
+            match crate::permissions::windows_apply_firewall_rules_impl(port) {
+                Ok(msg) => tracing::info!("{msg}"),
+                Err(e) => tracing::warn!("Firewall (pedido automático): {e}"),
+            }
+            {
+                let mut s = state.settings.lock().await;
+                s.windows_firewall_prompt_done = true;
+                if let Err(e) = s.save() {
+                    tracing::warn!("Erro ao gravar windows_firewall_prompt_done: {e}");
+                }
+            }
+        }
+    }
+
     let role = { state.settings.lock().await.role.clone() };
     let cancel = state.new_cancel_token().await;
     let state_clone = state.inner().clone();

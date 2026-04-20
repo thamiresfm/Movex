@@ -130,8 +130,9 @@ pub fn windows_apply_firewall_rules_for_movex(port: u16) -> Result<String, Strin
     }
 }
 
+/// Mesma lógica do comando IPC — usada no arranque da conexão (Windows) para pedir UAC uma vez.
 #[cfg(target_os = "windows")]
-fn windows_apply_firewall_rules_impl(port: u16) -> Result<String, String> {
+pub(crate) fn windows_apply_firewall_rules_impl(port: u16) -> Result<String, String> {
     use std::io::Write;
     use std::process::Command;
 

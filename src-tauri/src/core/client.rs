@@ -51,7 +51,7 @@ pub async fn connect_to_addr(
                 state.send_notification(
                     "Movex — Conexão",
                     &format!(
-                        "Não foi possível alcançar {}. Verifique IP e firewall (porta {}). {}",
+                        "Não foi possível alcançar {}. Verifique IP e firewall (porta {}). {} No PC em Servidor: na primeira ligação aceite o UAC para o Firewall (ou Configurações → Aplicar regras).",
                         target, port, HINT_TOPOLOGY
                     ),
                 ).await;
@@ -344,7 +344,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                         .send_notification(
                             "Movex — Não alcança o servidor",
                             &format!(
-                                "Confira IP, rede e firewall (porta). {}",
+                                "Confira IP, rede e firewall (porta). {} No Servidor: aceite o UAC do Firewall na 1.ª ligação.",
                                 HINT_TOPOLOGY
                             ),
                         )
@@ -360,7 +360,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                         .send_notification(
                             "Movex — Timeout na rede",
                             &format!(
-                                "Timeout ao alcançar o servidor. Rede ou firewall. {}",
+                                "Timeout ao alcançar o servidor. Rede ou firewall. {} No Servidor: aceite o UAC do Firewall na 1.ª ligação.",
                                 HINT_TOPOLOGY
                             ),
                         )
