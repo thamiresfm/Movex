@@ -353,8 +353,8 @@ export async function renderDashboard(): Promise<void> {
             <div class="card" id="networkChecklistCard" style="margin-bottom:14px;border-left:3px solid var(--cyan);">
               <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Alinhar a rede</div>
               <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
-                <li><strong style="color:var(--text);">Servidor:</strong> papel <em>Servidor</em>, depois <strong>Conectar</strong> no painel (fica a escutar na porta).</li>
-                <li><strong style="color:var(--text);">Cliente:</strong> papel <em>Cliente</em>, IP do servidor acima (ou Dispositivos → IP), mesma <strong>porta</strong> e mesma <strong>chave</strong>.</li>
+                <li><strong style="color:var(--text);">Servidor:</strong> papel <em>Servidor</em>, depois <strong>Conectar</strong> (fica a escutar na porta).</li>
+                <li><strong style="color:var(--text);">Cliente:</strong> papel <em>Cliente</em> e informe o IP <strong>do Servidor</strong> (não o contrário: o Cliente não aceita ligações de entrada).</li>
                 <li><strong style="color:var(--text);">Rede:</strong> os dois PCs na mesma LAN (mesmo Wi‑Fi ou cabo no mesmo router).</li>
                 <li><strong style="color:var(--text);">Firewall:</strong> permitir o app Movex na porta TCP (ex.: 24800) nos dois sistemas.</li>
                 <li><strong style="color:var(--text);">Teste rápido:</strong> no cliente, no terminal: <code style="font-size:11px;color:var(--cyan);">ping &lt;IP-do-servidor&gt;</code> — se não houver resposta, o Movex também não alcança.</li>
@@ -542,8 +542,7 @@ export async function renderDashboard(): Promise<void> {
     // Carregar dados da aba ao navegar
     if (page === 'configuracoes') {
       loadRecentPeers?.();
-      updateLockButton?.();
-      updateThemeButtons?.();
+      void loadCurrentSettings();
     }
     if (page === 'dispositivos') {
       queueMicrotask(() => {
@@ -817,7 +816,27 @@ export async function renderDashboard(): Promise<void> {
   addLog("Movex iniciado.", "info");
   addLog("Aguardando conexões na porta 24800.", "info");
 
-  const copyLogs = () => navigator.clipboard.writeText(document.getElementById('logBody')?.innerText ?? '');
+  const copyLogs = async () => {
+    const text = document.getElementById('logBody')?.innerText ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      addLog('Logs copiados para a área de transferência.', 'sec');
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        addLog('Logs copiados (método alternativo).', 'sec');
+      } catch (e) {
+        addLog(`Não foi possível copiar logs: ${e}`, 'warn');
+      }
+    }
+  };
   const toggleKey = () => {
     const inp = document.getElementById('keyInput') as HTMLInputElement;
     if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
@@ -833,11 +852,10 @@ export async function renderDashboard(): Promise<void> {
       applyRoleUI(currentRole);
 
       const addrInput = document.getElementById('serverAddrInput') as HTMLInputElement;
-      if (addrInput && s.server_addr) addrInput.value = s.server_addr;
+      if (addrInput) addrInput.value = s.server_addr ?? '';
 
       const keyInput = document.getElementById('keyInput') as HTMLInputElement;
       if (keyInput && s.psk_hex) {
-        // Mostrar PSK formatada em grupos de 4
         keyInput.value = s.psk_hex;
       }
 
@@ -852,6 +870,38 @@ export async function renderDashboard(): Promise<void> {
 
       const launchEl = document.getElementById('launchConnectionOnStartup') as HTMLInputElement;
       if (launchEl) launchEl.checked = !!s.launch_connection_on_startup;
+
+      const notifEl = document.getElementById('notifToggle') as HTMLInputElement;
+      if (notifEl) notifEl.checked = s.notifications_enabled ?? true;
+      const clipEl = document.getElementById('clipboardToggle') as HTMLInputElement;
+      if (clipEl) clipEl.checked = s.clipboard_sync_enabled ?? true;
+
+      const lockKeyEl = document.getElementById('lockKeyDisplay');
+      const lockKeyInput = document.getElementById('lockKeyInput') as HTMLInputElement;
+      const lk = s.lock_key ?? 'ctrl+alt+l';
+      if (lockKeyEl) lockKeyEl.textContent = lk;
+      if (lockKeyInput) lockKeyInput.value = lk;
+
+      const btnLock = document.getElementById('btnLockMode') as HTMLButtonElement | null;
+      if (btnLock) {
+        const locked = s.lock_mode ?? false;
+        btnLock.textContent = locked ? '🔒 Bloqueado' : '🔓 Desbloqueado';
+        btnLock.style.background = locked ? 'rgba(245,166,35,.15)' : '';
+        btnLock.style.borderColor = locked ? 'var(--warn)' : '';
+        btnLock.style.color = locked ? 'var(--warn)' : '';
+      }
+
+      const theme = s.theme ?? 'dark';
+      const { applyTheme } = await import('../main');
+      applyTheme(theme);
+      const dark = document.getElementById('themeDark') as HTMLButtonElement | null;
+      const light = document.getElementById('themeLight') as HTMLButtonElement | null;
+      if (dark && light) {
+        dark.style.borderColor = theme === 'dark' ? 'var(--cyan)' : 'var(--border)';
+        dark.style.color = theme === 'dark' ? 'var(--text)' : 'var(--text-2)';
+        light.style.borderColor = theme === 'light' ? 'var(--cyan)' : 'var(--border)';
+        light.style.color = theme === 'light' ? 'var(--text)' : 'var(--text-2)';
+      }
     } catch { /* fora do Tauri */ }
   };
 
@@ -859,7 +909,10 @@ export async function renderDashboard(): Promise<void> {
     const serverCard = document.getElementById('roleServerCard');
     const clientCard = document.getElementById('roleClientCard');
     const addrSection = document.getElementById('serverAddrSection');
+    const expectedWrap = document.getElementById('expectedClientWrap') as HTMLElement | null;
     if (!serverCard || !clientCard || !addrSection) return;
+
+    if (expectedWrap) expectedWrap.style.display = role === 'server' ? 'block' : 'none';
 
     if (role === 'server') {
       serverCard.style.cssText = serverCard.style.cssText.replace(/border:[^;]+/, 'border:2px solid var(--cyan)');
@@ -913,11 +966,24 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
+  const getThemeFromUI = (): string =>
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+
   const saveConfig = async () => {
     const port = parseInt((document.getElementById('portInput') as HTMLInputElement).value) || 24800;
-    // Ler chave do campo da UI (usuário pode ter alterado)
     const keyVal = (document.getElementById('keyInput') as HTMLInputElement)?.value.trim();
+    const theme = getThemeFromUI();
+    const notif = (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? true;
+    const clipboard = (document.getElementById('clipboardToggle') as HTMLInputElement)?.checked ?? true;
+    const lockKey =
+      (document.getElementById('lockKeyInput') as HTMLInputElement)?.value?.trim() || 'ctrl+alt+l';
     try {
+      await invoke('update_preferences', {
+        notificationsEnabled: notif,
+        lockKey,
+        clipboardSyncEnabled: clipboard,
+        theme,
+      });
       const s = await invoke<any>('get_settings');
       const screenName =
         (document.getElementById('screenNameInput') as HTMLInputElement)?.value?.trim() || s.hostname;
@@ -932,13 +998,13 @@ export async function renderDashboard(): Promise<void> {
         role: currentRole,
         serverAddr: (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null,
         port,
-        pskHex: keyVal || s.psk_hex, // usar valor digitado se não estiver vazio
+        pskHex: keyVal || s.psk_hex,
         peerPosition: s.peer_position ?? 'right',
         autostart: s.autostart ?? false,
-        theme: s.theme ?? 'dark',
+        theme,
       });
-      addLog("Configurações salvas com sucesso.", "sec");
-    } catch(e) {
+      addLog('Configurações salvas com sucesso.', 'sec');
+    } catch (e) {
       addLog(`Erro ao salvar: ${e}`, 'warn');
     }
   };
@@ -947,7 +1013,12 @@ export async function renderDashboard(): Promise<void> {
     await refreshSettings();
   };
 
-  // Carregar configurações atuais ao abrir a página
+  const discardSettings = async () => {
+    await refreshSettings();
+    await loadCurrentSettings();
+    addLog('Alterações descartadas.', 'info');
+  };
+
   await loadCurrentSettings();
 
   const setManualIpDetailsOpen = (open: boolean) => {
@@ -1150,7 +1221,8 @@ export async function renderDashboard(): Promise<void> {
     light.style.color       = theme === 'light' ? 'var(--text)' : 'var(--text-2)';
     await invoke('update_preferences', {
       notificationsEnabled: (document.getElementById('notifToggle') as HTMLInputElement)?.checked ?? true,
-      lockKey: (document.getElementById('lockKeyInput') as HTMLInputElement)?.value ?? 'ctrl+alt+l',
+      lockKey:
+        (document.getElementById('lockKeyInput') as HTMLInputElement)?.value?.trim() || 'ctrl+alt+l',
       clipboardSyncEnabled: (document.getElementById('clipboardToggle') as HTMLInputElement)?.checked ?? true,
       theme,
     }).catch(console.warn);
@@ -1226,41 +1298,6 @@ export async function renderDashboard(): Promise<void> {
   };
 
 
-  const updateLockButton = async () => {
-    try {
-      const s = await invoke<any>('get_settings');
-      const btn = document.getElementById('btnLockMode');
-      if (btn) {
-        const locked = s.lock_mode ?? false;
-        btn.textContent = locked ? '🔒 Bloqueado' : '🔓 Desbloqueado';
-        (btn as HTMLButtonElement).style.background = locked ? 'rgba(245,166,35,.15)' : '';
-        (btn as HTMLButtonElement).style.borderColor = locked ? 'var(--warn)' : '';
-        (btn as HTMLButtonElement).style.color = locked ? 'var(--warn)' : '';
-      }
-      const lockKeyEl = document.getElementById('lockKeyDisplay');
-      const lockKeyInput = document.getElementById('lockKeyInput') as HTMLInputElement;
-      if (lockKeyEl) lockKeyEl.textContent = s.lock_key ?? 'ctrl+alt+l';
-      if (lockKeyInput) lockKeyInput.value = s.lock_key ?? 'ctrl+alt+l';
-      const notifEl = document.getElementById('notifToggle') as HTMLInputElement;
-      if (notifEl) notifEl.checked = s.notifications_enabled ?? true;
-    } catch { /* fora do Tauri */ }
-  };
-
-  const updateThemeButtons = async () => {
-    try {
-      const s = await invoke<any>('get_settings');
-      const theme = s.theme ?? 'dark';
-      const dark  = document.getElementById('themeDark')  as HTMLButtonElement;
-      const light = document.getElementById('themeLight') as HTMLButtonElement;
-      if (dark && light) {
-        dark.style.borderColor  = theme === 'dark'  ? 'var(--cyan)' : 'var(--border)';
-        dark.style.color        = theme === 'dark'  ? 'var(--text)' : 'var(--text-2)';
-        light.style.borderColor = theme === 'light' ? 'var(--cyan)' : 'var(--border)';
-        light.style.color       = theme === 'light' ? 'var(--text)' : 'var(--text-2)';
-      }
-    } catch { /* fora do Tauri */ }
-  };
-
   // ── Descoberta mDNS ────────────────────────────────────────────────────────
   const refreshDevices = async () => {
     const btn = document.getElementById('btnRefreshDevices') as HTMLButtonElement;
@@ -1297,7 +1334,7 @@ export async function renderDashboard(): Promise<void> {
 
   const openManualIpFromToolbar = () => {
     revealManualIpForm();
-    addLog('Conectar por IP: preencha o endereço do servidor Movex.', 'info');
+    addLog('Conectar por IP: use o endereço do PC em Servidor (à escuta). O Cliente não aceita conexões nesta porta.', 'info');
   };
 
   const goToPainel = () => navTo('painel');
@@ -1369,7 +1406,7 @@ export async function renderDashboard(): Promise<void> {
   on('btnConfirmReset',    confirmReset);
   on('btnCancelReset',     closeResetModal);
   on('btnDoReset',         doReset);
-  on('btnDiscardSettings', loadCurrentSettings);
+  on('btnDiscardSettings', () => void discardSettings());
   on('btnSaveConfig',      saveConfigAndRefresh);
   on('btnApproveConn',     approveConn);
   on('btnRejectConn',      rejectConn);
@@ -1492,8 +1529,8 @@ function renderDiscoveredDevices(peers: PeerInfo[]) {
     grid.innerHTML = `
       <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-3);">
         <div style="font-size:32px;margin-bottom:12px;">🔍</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Nenhum servidor Movex encontrado</div>
-        <div style="font-size:12px;">Certifique-se de que o Movex está aberto e no modo Servidor no outro computador</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Nenhum Movex à escuta na rede</div>
+        <div style="font-size:12px;">Só aparecem PCs em papel Servidor com Conectar ativo. Se o outro está como Cliente, nesse computador use papel Cliente e informe o IP da máquina que está em Servidor — não tente ligar ao IP do Cliente.</div>
       </div>`;
     return;
   }

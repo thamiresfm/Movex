@@ -10,6 +10,9 @@ use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
 use crate::network::transport::{create_tls_connector, recv_message, send_message};
 
+/// Quem está em papel **Cliente** não abre a porta TCP: não adianta apontar o IP do Cliente a partir do Servidor.
+const HINT_TOPOLOGY: &str = "Quem está só como Cliente não aceita conexões nesta porta — ligue a partir do Cliente para o IP do computador em Servidor (ou ative Servidor e Conectar no outro PC).";
+
 async fn connection_failed_client(state: &SharedState) {
     {
         let mut status = state.connection_status.lock().await;
@@ -47,7 +50,10 @@ pub async fn connect_to_addr(
                 warn!("Falha ao conectar em {}: {}", target, e);
                 state.send_notification(
                     "Movex — Conexão",
-                    &format!("Não foi possível alcançar {}. Verifique IP, firewall (porta {}) e se o outro PC está em modo Servidor.", target, port),
+                    &format!(
+                        "Não foi possível alcançar {}. Verifique IP e firewall (porta {}). {}",
+                        target, port, HINT_TOPOLOGY
+                    ),
                 ).await;
                 connection_failed_client(&state).await;
                 return;
@@ -181,6 +187,9 @@ where
         }
         Ok(Message::ConnectionRejected { reason }) => {
             warn!("Conexão rejeitada pelo servidor: {}", reason);
+            state
+                .send_notification("Movex — Conexão recusada", &reason)
+                .await;
             {
                 let mut status = state.connection_status.lock().await;
                 *status = ConnectionStatus::Disconnected;
@@ -334,7 +343,10 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                     state
                         .send_notification(
                             "Movex — Não alcança o servidor",
-                            "Confira: (1) Outro PC em modo Servidor e Conectar. (2) Mesma rede. (3) Firewall permite a porta TCP. (4) IP correto em Configurações. (5) Abra Configurações → «Alinhar a rede».",
+                            &format!(
+                                "Confira IP, rede e firewall (porta). {}",
+                                HINT_TOPOLOGY
+                            ),
                         )
                         .await;
                 }
@@ -347,7 +359,10 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                     state
                         .send_notification(
                             "Movex — Timeout na rede",
-                            "Confira: (1) Outro PC em modo Servidor e Conectar. (2) Mesma rede Wi‑Fi/LAN. (3) Firewall. (4) IP do servidor. (5) Veja Configurações → «Alinhar a rede».",
+                            &format!(
+                                "Timeout ao alcançar o servidor. Rede ou firewall. {}",
+                                HINT_TOPOLOGY
+                            ),
                         )
                         .await;
                 }

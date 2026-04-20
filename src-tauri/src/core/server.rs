@@ -186,6 +186,15 @@ async fn handle_client<S>(
         }
     }
 
+    // Atualiza o estado exibido na UI: antes era só o IP do socket; agora o nome do cliente.
+    {
+        let mut status = state.connection_status.lock().await;
+        *status = ConnectionStatus::PendingApproval {
+            peer_hostname: peer_hostname.clone(),
+        };
+    }
+    crate::emit_status_to_main(&state).await;
+
     let our_screen_name = { state.settings.lock().await.screen_name.clone() };
 
     let _ = send_message(&mut stream, &Message::ConnectionPending {

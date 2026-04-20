@@ -773,12 +773,7 @@ pub fn run() {
         tracing::debug!("CryptoProvider: {:?}", e);
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
+    crate::core::logging::init();
 
     let settings = Settings::load();
     let shared_state: SharedState = Arc::new(AppState::new(settings));
