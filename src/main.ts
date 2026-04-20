@@ -1,7 +1,21 @@
 import "./styles/global.css";
 import { invoke } from "@tauri-apps/api/core";
 
+/** Pedido de permissão de notificações ao arranque (o SO mostra o diálogo nativo). */
+async function requestNotificationPermissionOnStartup(): Promise<void> {
+  try {
+    const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+    const granted = await isPermissionGranted();
+    if (!granted) {
+      await requestPermission();
+    }
+  } catch {
+    // Ambiente web / plugin indisponível — ignorar
+  }
+}
+
 async function init() {
+  void requestNotificationPermissionOnStartup();
   try {
     const settings = await invoke<any>("get_settings");
 

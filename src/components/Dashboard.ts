@@ -424,6 +424,25 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
 
+            <!-- Permissões do SO (atalhos para Definições) -->
+            <div class="card" style="margin-bottom:14px;" id="permCard">
+              <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px;">🔐 Permissões do sistema</div>
+              <div style="font-size:11px;color:var(--text-3);margin-bottom:10px;line-height:1.45;">
+                O KVM precisa de permissões de entrada (macOS: Acessibilidade e, em alguns sistemas, Monitorização de entrada).
+                As notificações podem ser pedidas automaticamente ao abrir a app; use os botões abaixo se precisar abrir os painéis manualmente.
+              </div>
+              <div id="permRowMac" style="display:none;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                <button type="button" id="btnPermMacAccessibility" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Acessibilidade</button>
+                <button type="button" id="btnPermMacInput" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Monitorização de entrada</button>
+                <button type="button" id="btnPermMacNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Notificações</button>
+              </div>
+              <div id="permRowWin" style="display:none;flex-wrap:wrap;gap:8px;">
+                <button type="button" id="btnPermWinNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Notificações</button>
+                <button type="button" id="btnPermWinFirewall" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Firewall</button>
+                <button type="button" id="btnPermWinPrivacy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Windows · Privacidade</button>
+              </div>
+            </div>
+
             <!-- Peers recentes -->
             <div class="card" style="margin-bottom:14px;">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -1021,6 +1040,31 @@ export async function renderDashboard(): Promise<void> {
 
   await loadCurrentSettings();
 
+  const openSystemPanel = async (panel: string) => {
+    if (!isTauri()) {
+      addLog('Use a aplicação Movex instalada para abrir as definições do sistema.', 'warn');
+      return;
+    }
+    try {
+      await invoke('open_system_settings', { panel });
+      addLog(`Definições do sistema abertas (${panel}).`, 'info');
+    } catch (e) {
+      addLog(`Não foi possível abrir definições: ${e}`, 'warn');
+    }
+  };
+
+  try {
+    const plat = await invoke<string>('get_platform_kind');
+    const rowMac = document.getElementById('permRowMac');
+    const rowWin = document.getElementById('permRowWin');
+    if (rowMac && rowWin) {
+      rowMac.style.display = plat === 'macos' ? 'flex' : 'none';
+      rowWin.style.display = plat === 'windows' ? 'flex' : 'none';
+    }
+  } catch {
+    /* ignorar se o comando não existir */
+  }
+
   const setManualIpDetailsOpen = (open: boolean) => {
     const el = document.getElementById('manualIpDetails') as HTMLDetailsElement | null;
     if (el) el.open = open;
@@ -1408,6 +1452,12 @@ export async function renderDashboard(): Promise<void> {
   on('btnDoReset',         doReset);
   on('btnDiscardSettings', () => void discardSettings());
   on('btnSaveConfig',      saveConfigAndRefresh);
+  on('btnPermMacAccessibility', () => void openSystemPanel('accessibility'));
+  on('btnPermMacInput',    () => void openSystemPanel('input_monitoring'));
+  on('btnPermMacNotif',    () => void openSystemPanel('notifications'));
+  on('btnPermWinNotif',    () => void openSystemPanel('notifications'));
+  on('btnPermWinFirewall', () => void openSystemPanel('firewall'));
+  on('btnPermWinPrivacy',  () => void openSystemPanel('privacy'));
   on('btnApproveConn',     approveConn);
   on('btnRejectConn',      rejectConn);
   on('btnAddMachine',      addNewMachine);

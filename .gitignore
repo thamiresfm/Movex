@@ -11,4 +11,6 @@ package-lock.json
 **/*.rs.old
 **/*.old.md
 **/*.old.css
+**/*.json.old
+**/*.conf.old
 **/*.bak-*

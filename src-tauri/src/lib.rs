@@ -3,6 +3,7 @@ mod config;
 mod core;
 mod input;
 mod network;
+mod permissions;
 mod screen;
 mod transfer;
 
@@ -882,6 +883,9 @@ pub fn run() {
                 }
             }
 
+            // ── Pedir Acessibilidade (macOS) + texto em Info.plist ─────────────
+            permissions::request_macos_accessibility_prompt();
+
             // ── Auto-start da conexão ao abrir o app ─────────────────────────
             {
                 let setup_done = tauri::async_runtime::block_on(async {
@@ -952,6 +956,8 @@ pub fn run() {
             check_for_update,
             install_update,
             set_screen_border,
+            permissions::open_system_settings,
+            permissions::get_platform_kind,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");
