@@ -66,10 +66,10 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                             let status = state.connection_status.lock().await;
                             if matches!(
                                 *status,
-                                ConnectionStatus::Connected { .. } | ConnectionStatus::PendingApproval { .. }
+                                ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting
                             ) {
                                 warn!(
-                                    "Rejeitando nova conexão de {} — já há cliente conectado ou aprovação pendente",
+                                    "Rejeitando nova conexão de {} — já há sessão em curso ou cliente ligado",
                                     peer_addr
                                 );
                                 continue;
@@ -87,9 +87,7 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
 
                         {
                             let mut status = state.connection_status.lock().await;
-                            *status = ConnectionStatus::PendingApproval {
-                                peer_hostname: peer_addr.to_string(),
-                            };
+                            *status = ConnectionStatus::Connecting;
                         }
                         crate::emit_status_to_main(&state).await;
 
@@ -149,7 +147,7 @@ async fn handle_client<S>(
                 server_resume_listening(&state).await;
                 return;
             }
-            // PSK não é mais validada: TLS + aprovação no servidor bastam na rede local.
+            // PSK não é mais validada: TLS na rede local.
             hostname
         }
         _ => {
@@ -178,72 +176,8 @@ async fn handle_client<S>(
         }
     }
 
-    // Atualiza o estado exibido na UI: antes era só o IP do socket; agora o nome do cliente.
-    {
-        let mut status = state.connection_status.lock().await;
-        *status = ConnectionStatus::PendingApproval {
-            peer_hostname: peer_hostname.clone(),
-        };
-    }
-    crate::emit_status_to_main(&state).await;
-
+    // Sem passo de aprovação no servidor: após TLS + Hello válido, aceita de imediato.
     let our_screen_name = { state.settings.lock().await.screen_name.clone() };
-
-    let _ = send_message(&mut stream, &Message::ConnectionPending {
-        hostname: our_screen_name.clone(),
-    }).await;
-
-    let (approval_tx, approval_rx) = tokio::sync::oneshot::channel::<bool>();
-    {
-        *state.pending_approval.lock().await = Some(peer_hostname.clone());
-        *state.approval_tx.lock().await = Some(approval_tx);
-    }
-
-    info!("Aguardando aprovação do usuário para conectar: {} ({})", peer_hostname, peer_addr);
-    // Sempre mostrar toast — mesmo com «notificações» desligadas, senão o utilizador não vê o pedido.
-    state
-        .notify_always(
-            "Movex — Aprovar ligação?",
-            &format!(
-                "{} pede controlo. Na janela do Movex toque em Aprovar ({}s).",
-                peer_hostname, 60
-            ),
-        )
-        .await;
-    state.focus_main_window().await;
-
-    let approved = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        approval_rx,
-    ).await;
-
-    {
-        *state.pending_approval.lock().await = None;
-        *state.approval_tx.lock().await = None;
-    }
-
-    match approved {
-        Ok(Ok(true)) => {
-            info!("Conexão aprovada: {} ({})", peer_hostname, peer_addr);
-            let _ = send_message(&mut stream, &Message::ConnectionApproved).await;
-        }
-        Ok(Ok(false)) => {
-            warn!("Conexão rejeitada pelo usuário: {} ({})", peer_hostname, peer_addr);
-            let _ = send_message(&mut stream, &Message::ConnectionRejected {
-                reason: "Conexão recusada pelo usuário do servidor".to_string(),
-            }).await;
-            server_resume_listening(&state).await;
-            return;
-        }
-        _ => {
-            warn!("Timeout na aprovação de conexão: {} ({})", peer_hostname, peer_addr);
-            let _ = send_message(&mut stream, &Message::ConnectionRejected {
-                reason: "Tempo de aprovação esgotado (60s)".to_string(),
-            }).await;
-            server_resume_listening(&state).await;
-            return;
-        }
-    }
 
     let _ = send_message(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,

@@ -6,7 +6,6 @@ import { initFileTransfer, cleanupFileTransfer } from "./FileTransfer";
 import {
   initStatusListener,
   onStatusChange,
-  startApprovalPolling,
   cleanupStatusHandlers,
   normalizeStatusPayload,
 } from "./ConnectionStatus";
@@ -345,7 +344,7 @@ export async function renderDashboard(): Promise<void> {
                   <input type="password" id="keyInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text);outline:none;letter-spacing:2px;" />
                   <button id="btnToggleKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
                 </div>
-                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">A ligação <strong style="color:var(--text-2);">não depende</strong> de ser a mesma chave nos dois PCs: usa TLS e a aprovação no servidor. Pode alterar ou deixar o valor gerado — só afeta o handshake legado, não bloqueia a conexão.</div>
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">A ligação <strong style="color:var(--text-2);">não depende</strong> de ser a mesma chave nos dois PCs (TLS). Pode alterar ou deixar o valor gerado — só afeta o handshake legado.</div>
               </div>
             </div>
 
@@ -502,64 +501,6 @@ export async function renderDashboard(): Promise<void> {
     </div>
   `;
 
-  // ── Modal de aprovação de conexão (overlay global) ───────────────────────
-  const approvalModalHtml = `
-    <div id="approvalOverlay" style="
-      display:none;
-      position:fixed;inset:0;z-index:9999;
-      background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
-      align-items:center;justify-content:center;
-    ">
-      <div style="
-        background:var(--bg-3);
-        border:1px solid var(--border-c);
-        border-radius:20px;
-        padding:32px 28px;
-        width:400px;
-        text-align:center;
-        box-shadow:0 0 40px rgba(0,212,255,.15);
-      ">
-        <div style="font-size:48px;margin-bottom:16px;">🖥️</div>
-        <div style="font-size:18px;font-weight:800;color:var(--text);margin-bottom:6px;">
-          Solicitação de Conexão
-        </div>
-        <div style="font-size:14px;color:var(--text-2);margin-bottom:6px;">
-          O computador
-        </div>
-        <div id="approvalHostname" style="
-          font-size:22px;font-weight:700;color:var(--cyan);
-          background:var(--cyan-dim);border:1px solid var(--border-c);
-          border-radius:10px;padding:10px 18px;
-          margin-bottom:12px;letter-spacing:.5px;
-        ">—</div>
-        <div style="font-size:13px;color:var(--text-2);margin-bottom:28px;line-height:1.5;">
-          quer controlar seu teclado e mouse.<br>
-          <span style="color:var(--text-3);font-size:11px;">Você terá controle total para desconectar a qualquer momento.</span>
-        </div>
-        <div style="display:flex;gap:12px;justify-content:center;">
-          <button id="btnRejectConn" style="
-            flex:1;padding:13px;border-radius:10px;
-            background:rgba(255,75,110,.12);border:1px solid rgba(255,75,110,.3);
-            color:var(--danger,#ff4b6e);font-family:'Inter',sans-serif;
-            font-size:14px;font-weight:700;cursor:pointer;
-            transition:all .15s;
-          ">✕ Recusar</button>
-          <button id="btnApproveConn" style="
-            flex:1;padding:13px;border-radius:10px;
-            background:var(--cyan);border:none;
-            color:#0b0c10;font-family:'Inter',sans-serif;
-            font-size:14px;font-weight:700;cursor:pointer;
-            transition:filter .15s;
-          ">✓ Permitir</button>
-        </div>
-        <div id="approvalCountdown" style="margin-top:16px;font-size:11px;color:var(--text-3);">
-          Recusa automática em 60s
-        </div>
-      </div>
-    </div>
-  `;
-  document.body.insertAdjacentHTML('beforeend', approvalModalHtml);
-
   // ── Sistema de navegação local (sem window.navTo) ───────────────────────────
   const navTo = (page: string) => {
     document.querySelectorAll('.page').forEach(p => (p as HTMLElement).classList.remove('active'));
@@ -590,52 +531,6 @@ export async function renderDashboard(): Promise<void> {
   document.querySelectorAll('.nav-item[data-nav]').forEach(el => {
     el.addEventListener('click', () => navTo((el as HTMLElement).dataset.nav!));
   });
-
-  let approvalCountdownTimer: ReturnType<typeof setInterval> | null = null;
-  let approvalSeconds = 60;
-
-  const showApprovalModal = (hostname: string) => {
-    const overlay = document.getElementById('approvalOverlay')!;
-    const hostnameEl = document.getElementById('approvalHostname')!;
-    const countdown = document.getElementById('approvalCountdown')!;
-    hostnameEl.textContent = hostname;
-    overlay.style.display = 'flex';
-    approvalSeconds = 60;
-    countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
-    if (approvalCountdownTimer) clearInterval(approvalCountdownTimer);
-    approvalCountdownTimer = setInterval(async () => {
-      approvalSeconds--;
-      countdown.textContent = `Recusa automática em ${approvalSeconds}s`;
-      if (approvalSeconds <= 0) {
-        clearInterval(approvalCountdownTimer!);
-        approvalCountdownTimer = null;
-        hideApprovalModal();
-        // Rejeitar no backend quando o countdown esgota
-        await invoke('reject_connection').catch(() => {});
-        addLog('Conexão recusada automaticamente (timeout)', 'warn');
-      }
-    }, 1000);
-  };
-
-  const hideApprovalModal = () => {
-    const overlay = document.getElementById('approvalOverlay');
-    if (overlay) overlay.style.display = 'none';
-    if (approvalCountdownTimer) { clearInterval(approvalCountdownTimer); approvalCountdownTimer = null; }
-  };
-
-  const approveConn = async () => {
-    hideApprovalModal();
-    await invoke('approve_connection').catch(console.warn);
-    addLog('Conexão aprovada ✓', 'sec');
-  };
-
-  const rejectConn = async () => {
-    hideApprovalModal();
-    await invoke('reject_connection').catch(console.warn);
-    addLog('Conexão recusada ✕', 'warn');
-  };
-
-  // Polling de aprovação movido para ConnectionStatus.startApprovalPolling — chamado abaixo
 
   // ── Cache de settings (raramente muda — evitar invoke por evento de status) ──
   let cachedSettings: any = null;
@@ -680,7 +575,7 @@ export async function renderDashboard(): Promise<void> {
       if (line) {
         const t = (status.status_text ?? '').trim();
         line.textContent = t || (status.connected ? 'Conectado' : 'Desconectado');
-        const waiting = /aguardando|conectando|aprovação|reconect/i.test(t);
+        const waiting = /aguardando|conectando|reconect/i.test(t);
         line.style.color = status.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
     }
@@ -829,21 +724,11 @@ export async function renderDashboard(): Promise<void> {
     );
   }
 
-  const stopApprovalPolling = startApprovalPolling(
-    (hostname) => showApprovalModal(hostname),
-    ()         => hideApprovalModal(),
-  );
-
   (window as any).__movexCleanup = () => {
     stopStatusPolling();
-    stopApprovalPolling();
     cleanupFileTransfer();
     cleanupAllListeners();
     cleanupStatusHandlers();
-    if (approvalCountdownTimer) {
-      clearInterval(approvalCountdownTimer);
-      approvalCountdownTimer = null;
-    }
   };
 
   // wrapper de cache será instalado após saveConfig ser definido
@@ -1174,7 +1059,7 @@ export async function renderDashboard(): Promise<void> {
       if (el) {
         const t = (st.status_text ?? '').trim();
         el.textContent = t || 'A iniciar…';
-        const waiting = /aguardando|conectando|aprovação|reconect/i.test(t);
+        const waiting = /aguardando|conectando|reconect/i.test(t);
         el.style.color = st.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
     } catch {
@@ -1512,8 +1397,6 @@ export async function renderDashboard(): Promise<void> {
   on('btnPermWinNotif',    () => void openSystemPanel('notifications'));
   on('btnPermWinFirewall', () => void openSystemPanel('firewall'));
   on('btnPermWinPrivacy',  () => void openSystemPanel('privacy'));
-  on('btnApproveConn',     approveConn);
-  on('btnRejectConn',      rejectConn);
   on('btnAddMachine',      addNewMachine);
   on('btnDiagReport',      () => addLog('Relatório completo: em desenvolvimento (use os logs abaixo para diagnóstico).', 'info'));
   on('btnDiagRestart',     () => addLog('Reinício de diagnósticos: apenas registo no log (sem ação no sistema).', 'info'));

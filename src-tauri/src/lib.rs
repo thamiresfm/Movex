@@ -72,9 +72,6 @@ async fn build_status_payload(state: &SharedState) -> StatusPayload {
             Some(peer_addr.clone()),
             Some(*latency_ms),
         ),
-        ConnectionStatus::PendingApproval { peer_hostname } => {
-            (false, Some(peer_hostname.clone()), None, None)
-        }
         _ => (false, None, None, None),
     };
 
@@ -470,29 +467,20 @@ async fn send_file_via_channel(
     Ok(())
 }
 
-/// Retorna o hostname do cliente aguardando aprovação (None = nenhum)
+/// Retorna o hostname do cliente aguardando aprovação — sempre `None` (aprovação automática).
 #[tauri::command]
-async fn get_pending_approval(state: State<'_, SharedState>) -> Result<Option<String>, String> {
-    Ok(state.pending_approval.lock().await.clone())
+async fn get_pending_approval(_state: State<'_, SharedState>) -> Result<Option<String>, String> {
+    Ok(None)
 }
 
-/// Aprova a conexão pendente
+/// Mantido para compatibilidade com a UI antiga; a ligação já não exige aprovação manual.
 #[tauri::command]
-async fn approve_connection(state: State<'_, SharedState>) -> Result<(), String> {
-    let tx = state.approval_tx.lock().await.take()
-        .ok_or_else(|| "Nenhuma conexão aguardando aprovação".to_string())?;
-    tx.send(true).map_err(|_| "Erro ao enviar aprovação".to_string())?;
-    tracing::info!("Conexão aprovada pelo usuário");
+async fn approve_connection(_state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Rejeita a conexão pendente
 #[tauri::command]
-async fn reject_connection(state: State<'_, SharedState>) -> Result<(), String> {
-    let tx = state.approval_tx.lock().await.take()
-        .ok_or_else(|| "Nenhuma conexão aguardando aprovação".to_string())?;
-    tx.send(false).map_err(|_| "Erro ao enviar rejeição".to_string())?;
-    tracing::info!("Conexão rejeitada pelo usuário");
+async fn reject_connection(_state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 

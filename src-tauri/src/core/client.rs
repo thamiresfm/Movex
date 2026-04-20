@@ -120,7 +120,7 @@ pub async fn connect_to_addr(
     } else {
         state.send_notification(
             "Movex — Conexão",
-            "Handshake falhou: confira se o servidor aprovou a ligação, versão do Movex e rede (TLS).",
+            "Handshake falhou: confira versão do Movex e rede (TLS).",
         ).await;
         connection_failed_client(&state).await;
     }
@@ -319,11 +319,11 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
                             { *state.message_tx.lock().await = None; }
                         } else {
-                            warn!("Handshake falhou — verifique aprovação no servidor e versão do Movex");
+                            warn!("Handshake falhou — verifique filtro de nome de ecrã e versão do Movex");
                             state
                                 .send_notification(
                                     "Movex",
-                                    "Handshake falhou: no servidor, aprove o pedido; verifique filtro de nome de ecrã e mesma versão do app.",
+                                    "Handshake falhou: verifique filtro de nome de ecrã no servidor e mesma versão do app.",
                                 )
                                 .await;
                             connection_failed_client(&state).await;

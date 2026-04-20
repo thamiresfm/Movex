@@ -12,10 +12,8 @@ pub enum ConnectionStatus {
     Disconnected,
     /// Servidor aberto, aguardando conexão de clientes
     Listening,
-    /// Cliente tentando alcançar o servidor
+    /// Cliente a ligar, ou servidor a aceitar handshake
     Connecting,
-    /// Handshake autenticado — aguardando aprovação do usuário local
-    PendingApproval { peer_hostname: String },
     Connected {
         peer_hostname: String,
         /// Endereço de rede do peer (ex.: `192.168.1.10:24800`).
@@ -31,9 +29,6 @@ impl std::fmt::Display for ConnectionStatus {
             Self::Disconnected => write!(f, "Desconectado"),
             Self::Listening    => write!(f, "Aguardando conexão..."),
             Self::Connecting   => write!(f, "Conectando..."),
-            Self::PendingApproval { peer_hostname } => {
-                write!(f, "Aguardando aprovação de {}", peer_hostname)
-            }
             Self::Connected {
                 peer_hostname,
                 peer_addr,
@@ -76,10 +71,6 @@ pub struct AppState {
     pub transfers: Arc<Mutex<HashMap<u32, TransferProgress>>>,
     /// Próximo ID de transferência
     pub next_transfer_id: Arc<Mutex<u32>>,
-    /// Hostname do cliente aguardando aprovação (Some = aguardando, None = nenhum)
-    pub pending_approval: Arc<Mutex<Option<String>>>,
-    /// Canal para enviar decisão de aprovação (true = aceitar, false = rejeitar)
-    pub approval_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<bool>>>>,
     /// Estatísticas da sessão atual
     pub stats: Arc<SessionStats>,
     /// Flag de modo lock (pausar transição de cursor)
@@ -102,8 +93,6 @@ impl AppState {
             session_started_at: Arc::new(Mutex::new(None)),
             transfers: Arc::new(Mutex::new(HashMap::new())),
             next_transfer_id: Arc::new(Mutex::new(1)),
-            pending_approval: Arc::new(Mutex::new(None)),
-            approval_tx: Arc::new(Mutex::new(None)),
             stats: Arc::new(SessionStats::default()),
             lock_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
@@ -117,27 +106,6 @@ impl AppState {
         if !notifications_on { return; }
         if let Some(app) = self.app_handle.lock().await.as_ref() {
             crate::core::notifications::notify(app, title, body);
-        }
-    }
-
-    /// Notificação **sempre** (ignora o toggle de notificações) — pedidos de aprovação no servidor, etc.
-    pub async fn notify_always(&self, title: &str, body: &str) {
-        if let Some(app) = self.app_handle.lock().await.as_ref() {
-            crate::core::notifications::notify(app, title, body);
-        }
-    }
-
-    /// Traz a janela principal para a frente (pedido de aprovação, etc.).
-    pub async fn focus_main_window(&self) {
-        use tauri::Manager;
-        let guard = self.app_handle.lock().await;
-        let Some(app) = guard.as_ref() else {
-            return;
-        };
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.unminimize();
-            let _ = w.show();
-            let _ = w.set_focus();
         }
     }
 

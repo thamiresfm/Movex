@@ -4,7 +4,6 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { onEvent } from '../utils/tauri-events';
-import { addLog } from './Logs';
 
 export interface StatusPayload {
   connected: boolean;
@@ -92,27 +91,3 @@ export async function initStatusListener(): Promise<() => void> {
   };
 }
 
-/**
- * Polling de aprovação de conexão pendente.
- * Retorna função de cleanup para o setInterval.
- */
-export function startApprovalPolling(
-  onPending: (hostname: string) => void,
-  onCleared: () => void,
-): () => void {
-  let lastPending: string | null = null;
-  const id = setInterval(async () => {
-    try {
-      const pending = await invoke<string | null>('get_pending_approval');
-      if (pending && pending !== lastPending) {
-        lastPending = pending;
-        onPending(pending);
-        addLog(`Solicitação de conexão de: ${pending}`, 'warn');
-      } else if (!pending && lastPending) {
-        lastPending = null;
-        onCleared();
-      }
-    } catch { /* fora do Tauri */ }
-  }, 500);
-  return () => clearInterval(id);
-}

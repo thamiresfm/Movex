@@ -103,7 +103,7 @@ export async function renderSetup(): Promise<void> {
             <code id="pskDisplay" style="font-family:monospace;font-size:18px;letter-spacing:3px;color:var(--cyan);word-break:break-all;">${formatPsk(settings.psk_hex)}</code>
             <button class="btn btn-outline" id="btnCopy">Copiar</button>
           </div>
-          <p style="font-size:12px;color:var(--text-3);margin-bottom:28px;">💡 Esta chave é opcional; não é preciso copiá-la para o outro PC. A ligação usa TLS e a aprovação no servidor.</p>
+          <p style="font-size:12px;color:var(--text-3);margin-bottom:28px;">💡 Esta chave é opcional; não é preciso copiá-la para o outro PC. A ligação usa TLS.</p>
           <div style="display:flex;gap:12px;justify-content:flex-end;">
             <button id="btnBack2" class="btn-ghost">← Voltar</button>
             <button id="btnFinish" class="btn-primary">Concluir Configuração ✓</button>

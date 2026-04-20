@@ -35,12 +35,9 @@ pub enum Message {
     Pong,
     Disconnect { reason: String },
 
-    // Aprovação de conexão
-    /// Servidor aguarda aprovação do usuário antes de aceitar
+    // Aprovação (legado — servidores antigos; o cliente ainda interpreta)
     ConnectionPending { hostname: String },
-    /// Usuário aprovou a conexão
     ConnectionApproved,
-    /// Usuário rejeitou a conexão
     ConnectionRejected { reason: String },
 }
 
