@@ -10,7 +10,6 @@
 
 O **Movex** é um aplicativo de KVM por software — semelhante ao Barrier e Deskflow — que permite usar **um único teclado e mouse físicos para controlar múltiplos computadores** na mesma rede local. Basta mover o cursor para a borda da tela e ele "flui" para o próximo computador.
 
-**Documentação interna:** [Modelo KVM, referência Barrier/Deskflow e checklist de UX](docs/MODELO_KVM_E_UX.md) (alinhamento conceitual e critérios de validação manual).
 
 ---
 
