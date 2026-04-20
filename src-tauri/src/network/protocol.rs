@@ -9,7 +9,7 @@ pub enum Message {
     // Handshake
     /// Servidor envia primeiro: versão + nonce aleatório para o cliente computar HMAC
     ServerChallenge { version: u32, hostname: String, server_nonce: String },
-    /// Cliente responde: hostname + HMAC(psk, server_nonce)
+    /// Cliente responde: hostname + HMAC(psk, server_nonce) — campo legado; o servidor não exige a mesma PSK no par
     Hello { version: u32, hostname: String, hmac: String },
     HelloAck { version: u32, hostname: String },
     HelloReject { reason: String },

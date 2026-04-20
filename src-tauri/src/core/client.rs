@@ -120,7 +120,7 @@ pub async fn connect_to_addr(
     } else {
         state.send_notification(
             "Movex — Conexão",
-            "Handshake falhou: confira se a chave de segurança (PSK) é a mesma no servidor e no cliente e se o servidor aprovou a conexão.",
+            "Handshake falhou: confira se o servidor aprovou a ligação, versão do Movex e rede (TLS).",
         ).await;
         connection_failed_client(&state).await;
     }
@@ -319,7 +319,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
                             { *state.message_tx.lock().await = None; }
                         } else {
-                            warn!("Handshake falhou — verifique PSK idêntica ou aprovação no servidor");
+                            warn!("Handshake falhou — verifique aprovação no servidor e versão do Movex");
                             state
                                 .send_notification(
                                     "Movex",

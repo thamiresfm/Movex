@@ -83,7 +83,7 @@ jobs:
             ### 🚀 Como usar
             1. Instale o Movex nos dois computadores
             2. No principal → **Servidor**
-            3. No outro → **Cliente** com a mesma chave de segurança
+            3. No outro → **Cliente** com o IP do servidor (TLS; aprovação no servidor se pedido)
             4. Mova o cursor para a borda da tela para passar o controle
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

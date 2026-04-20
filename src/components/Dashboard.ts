@@ -314,7 +314,7 @@ export async function renderDashboard(): Promise<void> {
               </div>
               <div id="expectedClientWrap" style="margin-bottom:12px;">
                 <label for="expectedClientScreenInput" style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:6px;">Aceitar só cliente com este nome (opcional)</label>
-                <input id="expectedClientScreenInput" type="text" placeholder="Vazio = qualquer cliente com PSK correta"
+                <input id="expectedClientScreenInput" type="text" placeholder="Vazio = aceitar qualquer nome de cliente"
                   style="width:100%;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
                 <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Apenas no <strong style="color:var(--text-2);">Servidor</strong>: rejeita clientes cujo nome de ecrã não coincide (exato).</div>
               </div>
@@ -339,13 +339,13 @@ export async function renderDashboard(): Promise<void> {
               <div class="card">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
-                  <span style="font-size:13px;font-weight:600;color:var(--text);">Chave de Segurança</span>
+                  <span style="font-size:13px;font-weight:600;color:var(--text);">Chave (opcional)</span>
                 </div>
                 <div style="position:relative;">
                   <input type="password" id="keyInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 40px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--text);outline:none;letter-spacing:2px;" />
                   <button id="btnToggleKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;">👁</button>
                 </div>
-                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Obrigatório: a chave deve ser <strong style="color:var(--text-2);">exatamente igual</strong> no servidor e no cliente (copie e cole). Chaves diferentes bloqueiam a conexão.</div>
+                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">A ligação <strong style="color:var(--text-2);">não depende</strong> de ser a mesma chave nos dois PCs: usa TLS e a aprovação no servidor. Pode alterar ou deixar o valor gerado — só afeta o handshake legado, não bloqueia a conexão.</div>
               </div>
             </div>
 

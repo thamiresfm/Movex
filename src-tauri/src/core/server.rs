@@ -118,7 +118,7 @@ async fn handle_client<S>(
 ) where
     S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin + Send + 'static,
 {
-    // Handshake: enviar nonce → receber Hello com HMAC → validar PSK
+    // Handshake: enviar nonce → receber Hello (HMAC enviado por compatibilidade; não é obrigatório coincidir entre PCs)
     let server_nonce = hex::encode(rand::random::<[u8; 32]>());
     let our_screen_for_challenge = { state.settings.lock().await.screen_name.clone() };
     if let Err(e) = send_message(&mut stream, &Message::ServerChallenge {
@@ -141,7 +141,7 @@ async fn handle_client<S>(
     };
 
     let peer_hostname = match hello {
-        Message::Hello { version, hostname, hmac } => {
+        Message::Hello { version, hostname, hmac: _ } => {
             if version != PROTOCOL_VERSION {
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
@@ -149,15 +149,7 @@ async fn handle_client<S>(
                 server_resume_listening(&state).await;
                 return;
             }
-            let psk_hex = { state.settings.lock().await.psk_hex.clone() };
-            if !crate::core::auth::verify_hmac(&psk_hex, &server_nonce, &hmac) {
-                warn!("PSK incorreta de {} — rejeitando conexão", peer_addr);
-                let _ = send_message(&mut stream, &Message::HelloReject {
-                    reason: "Chave de segurança incorreta".to_string(),
-                }).await;
-                server_resume_listening(&state).await;
-                return;
-            }
+            // PSK não é mais validada: TLS + aprovação no servidor bastam na rede local.
             hostname
         }
         _ => {

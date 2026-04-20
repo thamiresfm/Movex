@@ -14,7 +14,8 @@ pub fn compute_hmac(psk_hex: &str, server_nonce: &str) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// Verifica HMAC em tempo constante para resistir a timing attacks.
+/// Verifica HMAC em tempo constante (usada em testes; o servidor já não exige PSK coincidente).
+#[allow(dead_code)]
 pub fn verify_hmac(psk_hex: &str, server_nonce: &str, received_hmac: &str) -> bool {
     let expected_bytes = match hex::decode(received_hmac) {
         Ok(b) => b,
