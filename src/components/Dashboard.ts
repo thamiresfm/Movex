@@ -356,9 +356,16 @@ export async function renderDashboard(): Promise<void> {
                 <li><strong style="color:var(--text);">Servidor:</strong> papel <em>Servidor</em>, depois <strong>Conectar</strong> (fica a escutar na porta).</li>
                 <li><strong style="color:var(--text);">Cliente:</strong> papel <em>Cliente</em> e informe o IP <strong>do Servidor</strong> (não o contrário: o Cliente não aceita ligações de entrada).</li>
                 <li><strong style="color:var(--text);">Rede:</strong> os dois PCs na mesma LAN (mesmo Wi‑Fi ou cabo no mesmo router).</li>
-                <li><strong style="color:var(--text);">Firewall:</strong> permitir o app Movex na porta TCP (ex.: 24800) nos dois sistemas.</li>
+                <li><strong style="color:var(--text);">Firewall:</strong> no <em>servidor</em>, a porta TCP (ex.: 24800) tem de aceitar ligações de entrada (Windows: botão «Aplicar regras no firewall»; macOS: Definições do Sistema → Rede → Firewall → Opções → permitir Movex).</li>
+                <li><strong style="color:var(--text);">Wi‑Fi / router:</strong> desative «isolamento de cliente» / «AP isolation» se existir — caso contrário os equipamentos não veem uns aos outros.</li>
+                <li><strong style="color:var(--text);">VPN:</strong> desligue VPN no cliente ou servidor para testar na LAN.</li>
+                <li><strong style="color:var(--text);">Certificado TLS:</strong> se reinstalou o Movex no <em>servidor</em> ou mudou de PC servidor, no <em>cliente</em> use o botão abaixo antes de ligar outra vez.</li>
                 <li><strong style="color:var(--text);">Teste rápido:</strong> no cliente, no terminal: <code style="font-size:11px;color:var(--cyan);">ping &lt;IP-do-servidor&gt;</code> — se não houver resposta, o Movex também não alcança.</li>
               </ol>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;">
+                <button type="button" id="btnClearServerCert" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Esquecer certificado TLS do servidor</button>
+                <span style="font-size:10px;color:var(--text-3);">Apenas no cliente — útil após reinstalar o app no servidor ou trocar de máquina servidora.</span>
+              </div>
               <div style="font-size:11px;color:var(--text-3);margin-top:10px;">Se ficar «Timeout» ou «Reconectando», use <strong>Desconectar</strong>, confira o IP e o servidor, depois <strong>Conectar</strong> de novo.</div>
             </div>
 
@@ -1081,6 +1088,20 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
+  const clearServerCertTrust = async () => {
+    if (!isTauri()) {
+      addLog('Use a aplicação Movex instalada.', 'warn');
+      return;
+    }
+    try {
+      await invoke('clear_server_cert_trust');
+      addLog('Certificado TLS do servidor esquecido. Tente Conectar de novo.', 'info');
+      await refreshSettings();
+    } catch (e) {
+      addLog(`Erro: ${e}`, 'warn');
+    }
+  };
+
   try {
     const plat = await invoke<string>('get_platform_kind');
     const rowMac = document.getElementById('permRowMac');
@@ -1485,6 +1506,7 @@ export async function renderDashboard(): Promise<void> {
   on('btnPermMacInput',    () => void openSystemPanel('input_monitoring'));
   on('btnPermMacNotif',    () => void openSystemPanel('notifications'));
   on('btnPermWinApplyFw',  () => void applyWindowsFirewallRules());
+  on('btnClearServerCert', () => void clearServerCertTrust());
   on('btnPermWinFirewallAdv', () => void openSystemPanel('firewall_advanced'));
   on('btnPermWinProxy',    () => void openSystemPanel('proxy'));
   on('btnPermWinNotif',    () => void openSystemPanel('notifications'));

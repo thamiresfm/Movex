@@ -303,6 +303,19 @@ async fn reset_settings(state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Limpa o fingerprint TLS guardado (TOFU). Use no **cliente** quando o servidor foi reinstalado,
+/// mudou de PC ou passou a apresentar outro certificado — sem apagar o resto das configurações.
+#[tauri::command]
+async fn clear_server_cert_trust(state: State<'_, SharedState>) -> Result<(), String> {
+    {
+        let mut s = state.settings.lock().await;
+        s.server_cert_fingerprint = None;
+        s.save()?;
+    }
+    tracing::info!("Confiança TLS do servidor (TOFU) limpa");
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_role(state: State<'_, SharedState>, role: String) -> Result<(), String> {
     let mut s = state.settings.lock().await;
@@ -969,6 +982,7 @@ pub fn run() {
             start_connection,
             disconnect,
             reset_settings,
+            clear_server_cert_trust,
             set_role,
             set_server_addr,
             discover_peers,

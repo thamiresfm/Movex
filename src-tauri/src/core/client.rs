@@ -42,7 +42,7 @@ pub async fn connect_to_addr(
             return;
         }
         r = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(15),
             TcpStream::connect(&target)
         ) => match r {
             Ok(Ok(s)) => s,
@@ -269,7 +269,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                 return;
             }
             r = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(15),
                 TcpStream::connect(&addr)
             ) => r
         };
@@ -323,7 +323,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             state
                                 .send_notification(
                                     "Movex",
-                                    "Falha na autenticação: mesma chave nos dois PCs? Servidor aprovou?",
+                                    "Handshake falhou: no servidor, aprove o pedido; verifique filtro de nome de ecrã e mesma versão do app.",
                                 )
                                 .await;
                             connection_failed_client(&state).await;
@@ -332,6 +332,12 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                     }
                     Err(e) => {
                         warn!("Falha no TLS handshake: {}", e);
+                        state
+                            .send_notification(
+                                "Movex — TLS",
+                                "Não foi possível estabelecer TLS. Confirme IP/porta, firewall no PC servidor e mesma LAN. Se reinstalou o Movex no servidor ou mudou de PC: Configurações → Esquecer certificado TLS (ou Resetar).",
+                            )
+                            .await;
                         crate::emit_status_to_main(&state).await;
                     }
                 }
