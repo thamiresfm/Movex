@@ -1,12 +1,10 @@
-name: Build Movex
+# Release e binários (macOS/Windows) — só ao criar/push de tag v* (evita jobs skipped em main).
+name: Release
 
 on:
   push:
-    branches: [main]
     tags:
       - 'v*'
-  pull_request:
-    branches: [main]
   workflow_dispatch: {}
 
 permissions:
@@ -16,11 +14,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ──────────────────────────────────────────────────────────────
-  # Lint + Testes Rust — PRs e tags
-  # ──────────────────────────────────────────────────────────────
   test:
-    name: Lint e Testes Rust
+    name: Lint, testes Rust e build frontend
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -47,33 +42,26 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings 2>&1
       - name: Testes unitários
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
-
-      - name: Configurar Node.js (build frontend)
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Build frontend (Vite)
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
           npm run build
-
-      - name: Publicar artefato do frontend (dist)
+      - name: Artefato frontend (verificação)
         uses: actions/upload-artifact@v4
         with:
-          name: movex-frontend-dist
+          name: movex-frontend-dist-tag-build
           path: dist/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
-  # ──────────────────────────────────────────────────────────────
-  # Release no GitHub (só tags v*) — antes dos builds para permitir paralelismo
-  # ──────────────────────────────────────────────────────────────
   release:
     name: Criar GitHub Release
     runs-on: ubuntu-24.04
     needs: [test]
-    if: success() && startsWith(github.ref, 'refs/tags/v')
     outputs:
       release_id: ${{ steps.gh_release.outputs.id }}
     steps:
@@ -91,7 +79,7 @@ jobs:
 
             Controle múltiplos computadores com um único teclado e mouse pela rede local.
 
-            ### 📦 Downloads
+            ### Downloads
 
             | Plataforma | Arquivo |
             |---|---|
@@ -99,29 +87,23 @@ jobs:
             | Windows 10/11 x64 | `Movex_*_x64_en-US.msi` |
             | Windows 10/11 x64 | `Movex_*_x64-setup.exe` |
 
-            ### 🚀 Como usar
+            ### Como usar
             1. Instale o Movex nos dois computadores
-            2. No principal → **Servidor**
-            3. No outro → **Cliente** com o IP do servidor (TLS)
+            2. No principal, **Servidor**
+            3. No outro, **Cliente** com o IP do servidor (TLS)
             4. Mova o cursor para a borda da tela para passar o controle
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ──────────────────────────────────────────────────────────────
-  # Build macOS — tags v* (paralelo ao Windows)
-  # ──────────────────────────────────────────────────────────────
   build-macos:
     name: Build macOS (Universal)
     runs-on: macos-latest
-    needs: [test, release]
-    if: success() && startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-
       - uses: actions/cache@v4
         with:
           path: |
@@ -130,16 +112,13 @@ jobs:
             src-tauri/target
           key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: macos-cargo-
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
-
       - name: Instalar dependências npm
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
       - name: Build e upload macOS
         uses: tauri-apps/tauri-action@v0
         env:
@@ -150,19 +129,13 @@ jobs:
           releaseId: ${{ needs.release.outputs.release_id }}
           args: --target universal-apple-darwin
 
-  # ──────────────────────────────────────────────────────────────
-  # Build Windows — tags v* (paralelo ao macOS; não depende do job macOS)
-  # ──────────────────────────────────────────────────────────────
   build-windows:
     name: Build Windows (x64)
     runs-on: windows-latest
-    needs: [test, release]
-    if: success() && startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: actions/cache@v4
         with:
           path: |
@@ -171,17 +144,14 @@ jobs:
             src-tauri/target
           key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-cargo-
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
-
       - name: Instalar dependências npm
         shell: bash
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-
       - name: Certificado Windows (opcional)
         shell: pwsh
         env:
@@ -198,7 +168,6 @@ jobs:
           $pwd = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
           Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
           Write-Host "Certificado instalado."
-
       - name: Build e upload Windows
         uses: tauri-apps/tauri-action@v0
         env:

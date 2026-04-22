@@ -1,0 +1,63 @@
+# CI em push para main e em PRs — sem jobs "skipped" (só o que aplica a este ref).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    name: Lint, testes Rust e build frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ubuntu24-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu24-cargo-
+      - name: Instalar dependências Linux
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev pkg-config \
+            cmake nasm clang libdbus-1-dev
+      - name: Clippy (warnings como erros)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings 2>&1
+      - name: Testes unitários
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend (Vite)
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+
+      - name: Publicar artefato do frontend (dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: movex-frontend-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
