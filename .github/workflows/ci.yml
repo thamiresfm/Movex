@@ -62,23 +62,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Resumo (instaladores nativos e workflow «Release»)
+      - name: Resumo (CI vs Release)
         if: success()
         run: |
-          {
-            echo "### O que este workflow faz"
-            echo "- Testes Rust (Clippy + unitários) e \`npm run build\` (Vite)."
-            echo "- Artefato **movex-frontend-dist** = pasta \`dist/\` (só o frontend empacotado)."
-            echo ""
-            echo "### Por que não há .dmg / .exe / .msi aqui"
-            echo "Instaladores **macOS** e **Windows** são gerados pelo workflow **Release**, que **só corre** ao fazer **push de uma tag** de versão, por exemplo \`v0.3.7\`."
-            echo ""
-            echo "**Comandos (local):**"
-            echo '```'
-            echo "git tag v0.3.7   # ou a versão desejada"
-            echo "git push origin v0.3.7"
-            echo '```'
-            echo "Depois, em **Actions** → workflow **Release**, vê os jobs *Criar GitHub Release*, *Build macOS* e *Build Windows*."
-            echo ""
-            echo "Na lista de runs, o nome do workflow de CI é **CI** (não «Build Movex» — isso era o ficheiro antigo, já removido)."
-          } >> "$GITHUB_STEP_SUMMARY"
+          cat << 'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## O que este workflow (CI) faz
+
+          | Etapa | Conteúdo |
+          |------|----------|
+          | **Rust** | `cargo clippy` (lib) e `cargo test` (lib) |
+          | **Web** | `npm run build` (Vite) |
+          | **Artefato** | `movex-frontend-dist` = pasta `dist/` (só o frontend, não é instalador) |
+
+          ## Instaladores .dmg / .exe / .msi
+
+          São gerados pelo workflow **Release**, que **só dispara** com **push de uma tag** `v*`, por exemplo:
+
+          ```bash
+          git tag v0.3.7
+          git push origin v0.3.7
+          ```
+
+          Depois: **Actions** → **Release** → ver *Criar GitHub Release*, *Build macOS*, *Build Windows* e os ficheiros em **Releases**.
+
+          O rodapé *Job summary generated at run-time* vem do GitHub (não é editável por este repositório).
+          EOF
