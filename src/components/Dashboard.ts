@@ -55,6 +55,7 @@ interface SettingsPayload {
   role: string;
   peer_position: string;
   setup_complete: boolean;
+  port?: number;
 }
 
 export async function renderDashboard(): Promise<void> {
@@ -270,6 +271,11 @@ export async function renderDashboard(): Promise<void> {
           <!-- CONFIGURAÇÕES -->
           <div class="page" id="page-configuracoes">
 
+            <div id="configRoleBanner" class="card" style="margin-bottom:14px;border-left:3px solid var(--cyan);">
+              <div id="configRoleBannerTitle" style="font-size:12px;font-weight:700;color:var(--text);">A configurar como Servidor</div>
+              <div id="configRoleBannerDesc" style="font-size:12px;color:var(--text-2);line-height:1.5;margin-top:4px;">Esta máquina fica à escuta na rede. No outro PC, use o papel Cliente e o IP deste computador.</div>
+            </div>
+
             <!-- Papel desta máquina -->
             <div class="card" style="margin-bottom:14px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:14px;">Papel desta Máquina</div>
@@ -309,7 +315,8 @@ export async function renderDashboard(): Promise<void> {
                 <label for="screenNameInput" style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:6px;">Nome do ecrã neste PC</label>
                 <input id="screenNameInput" type="text" placeholder="Ex.: MacBook-Pro ou PC-Sala"
                   style="width:100%;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-                <div style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Identifica este computador no handshake (como o «Screen name» no Barrier). Deve coincidir com o que configurar no servidor se usar filtro abaixo.</div>
+                <div id="screenNameHelpServer" style="font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Identifica este computador no handshake (estilo «Screen name» do Barrier). No servidor, pode restringir o nome do cliente com a opção abaixo.</div>
+                <div id="screenNameHelpClient" style="display:none;font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.45;">Identifica este computador no handshake. O encaixe dos monitores segue o nome que o vê o servidor; não use o filtro «aceitar só cliente…» (é só do outro PC).</div>
               </div>
               <div id="expectedClientWrap" style="margin-bottom:12px;">
                 <label for="expectedClientScreenInput" style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:6px;">Aceitar só cliente com este nome (opcional)</label>
@@ -317,9 +324,9 @@ export async function renderDashboard(): Promise<void> {
                   style="width:100%;background:var(--bg-input,var(--bg));border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
                 <div style="font-size:10px;color:var(--text-3);margin-top:6px;">Apenas no <strong style="color:var(--text-2);">Servidor</strong>: rejeita clientes cujo nome de ecrã não coincide (exato).</div>
               </div>
-              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:12px;color:var(--text-2);">
-                <input type="checkbox" id="launchConnectionOnStartup" style="width:16px;height:16px;accent-color:var(--cyan);" />
-                Ligar sessão KVM ao abrir o app (início automático; desligado = como Barrier — usa «Conectar» no painel)
+              <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text-2);">
+                <input type="checkbox" id="launchConnectionOnStartup" style="width:16px;height:16px;min-width:16px;accent-color:var(--cyan);margin-top:2px;" />
+                <span id="launchConnLabel">Ao abrir o app, entrar em modo anfitrião (escutar na porta; desligado = liga manualmente com «Conectar» no painel, como no Barrier).</span>
               </label>
             </div>
 
@@ -348,24 +355,37 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
 
-            <!-- Checklist rede (cliente + servidor) -->
+            <!-- Checklist rede — conteúdo partido por papel (applyRoleUI mostra o bloco certo) -->
             <div class="card" id="networkChecklistCard" style="margin-bottom:14px;border-left:3px solid var(--cyan);">
               <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--text-3);text-transform:uppercase;margin-bottom:10px;">Alinhar a rede</div>
-              <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
-                <li><strong style="color:var(--text);">Servidor:</strong> papel <em>Servidor</em>, depois <strong>Conectar</strong> (fica a escutar na porta).</li>
-                <li><strong style="color:var(--text);">Cliente:</strong> papel <em>Cliente</em> e informe o IP <strong>do Servidor</strong> (não o contrário: o Cliente não aceita ligações de entrada).</li>
-                <li><strong style="color:var(--text);">Rede:</strong> os dois PCs na mesma LAN (mesmo Wi‑Fi ou cabo no mesmo router).</li>
-                <li><strong style="color:var(--text);">Firewall:</strong> no <em>servidor</em>, a porta TCP (ex.: 24800) tem de aceitar ligações de entrada (Windows: botão «Aplicar regras no firewall»; macOS: Definições do Sistema → Rede → Firewall → Opções → permitir Movex).</li>
-                <li><strong style="color:var(--text);">Wi‑Fi / router:</strong> desative «isolamento de cliente» / «AP isolation» se existir — caso contrário os equipamentos não veem uns aos outros.</li>
-                <li><strong style="color:var(--text);">VPN:</strong> desligue VPN no cliente ou servidor para testar na LAN.</li>
-                <li><strong style="color:var(--text);">Certificado TLS:</strong> se reinstalou o Movex no <em>servidor</em> ou mudou de PC servidor, no <em>cliente</em> use o botão abaixo antes de ligar outra vez.</li>
-                <li><strong style="color:var(--text);">Teste rápido:</strong> no cliente, no terminal: <code style="font-size:11px;color:var(--cyan);">ping &lt;IP-do-servidor&gt;</code> — se não houver resposta, o Movex também não alcança.</li>
-              </ol>
-              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;">
-                <button type="button" id="btnClearServerCert" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Esquecer certificado TLS do servidor</button>
-                <span style="font-size:10px;color:var(--text-3);">Apenas no cliente — útil após reinstalar o app no servidor ou trocar de máquina servidora.</span>
+
+              <div id="netChecklistServer" style="display:none;">
+                <ol style="margin:0 0 12px 0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
+                  <li><strong style="color:var(--text);">Escutar na rede:</strong> confirme o papel <em>Servidor</em> acima e use <strong>Conectar</strong> no painel (esta máquina fica à escuta na porta indicada).</li>
+                  <li><strong style="color:var(--text);">Firewall (entrada):</strong> nesta máquina, a porta TCP (ex.: 24800) tem de aceitar ligações de entrada. No Windows, use o botão <strong>«Aplicar regras no firewall (admin)»</strong> em Permissões abaixo; no macOS, permita o Movex no Firewall de aplicação.</li>
+                </ol>
               </div>
-              <div style="font-size:11px;color:var(--text-3);margin-top:10px;">Se ficar «Timeout» ou «Reconectando», use <strong>Desconectar</strong>, confira o IP e o servidor, depois <strong>Conectar</strong> de novo.</div>
+
+              <div id="netChecklistClient" style="display:none;">
+                <ol style="margin:0 0 12px 0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
+                  <li><strong style="color:var(--text);">Ligar ao anfitrião:</strong> papel <em>Cliente</em> e o IP ou hostname do <strong>servidor</strong> em <strong>Endereço do Servidor</strong> acima (este PC não fica a aceitar ligações nessa mesma lógica; quem escuta é o outro).</li>
+                  <li><strong style="color:var(--text);">Certificado TLS:</strong> se o Movex foi reinstalado <em>no PC servidor</em> ou mudou a máquina anfitriã, toque no botão abaixo <em>neste</em> computador (cliente) antes de voltar a ligar.</li>
+                  <li><strong style="color:var(--text);">Teste de alcance:</strong> no terminal: <code style="font-size:11px;color:var(--cyan);">ping &lt;IP-do-servidor&gt;</code> — se não houver resposta, o Movex também não alcança.</li>
+                </ol>
+                <div id="configClientTlsRow" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">
+                  <button type="button" id="btnClearServerCert" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Esquecer certificado TLS do servidor</button>
+                  <span style="font-size:10px;color:var(--text-3);">Limpa a confiança do certificado do anfitrião (útil após trocar o PC servidor ou reinstalar a app lá).</span>
+                </div>
+              </div>
+
+              <div id="netChecklistCommon">
+                <ol style="margin:0;padding-left:18px;font-size:12px;color:var(--text-2);line-height:1.65;">
+                  <li><strong style="color:var(--text);">Rede:</strong> os dois PCs na mesma LAN (mesmo Wi‑Fi ou cabo no mesmo router).</li>
+                  <li><strong style="color:var(--text);">Wi‑Fi / router:</strong> desative «isolamento de cliente» / «AP isolation» se existir.</li>
+                  <li><strong style="color:var(--text);">VPN:</strong> desative VPN para testar na LAN, se tiver dúvidas de encaminhamento.</li>
+                </ol>
+              </div>
+              <div style="font-size:11px;color:var(--text-3);margin-top:10px;">Se aparecer «Timeout» ou «Reconectando», use <strong>Desconectar</strong>, confira o IP, o papel (Servidor/Cliente) e tente <strong>Conectar</strong> de novo.</div>
             </div>
 
             <!-- SSL + Clipboard + Tema + Lock -->
@@ -443,12 +463,16 @@ export async function renderDashboard(): Promise<void> {
                 <button type="button" id="btnPermMacNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Notificações</button>
               </div>
               <div id="permRowWin" style="display:none;flex-direction:column;gap:10px;">
-                <div style="font-size:10px;color:var(--text-3);line-height:1.45;">
-                  Na <strong>primeira vez que ligar</strong>, o Movex pede automaticamente o UAC para criar regras no Firewall (aceite «Sim»).
-                  Se recusou antes, use <strong>Aplicar regras no firewall (admin)</strong>. Em proxy corporativo: <strong>Proxy do sistema</strong>.
+                <div id="permWinServerInbound" style="display:none;flex-direction:column;gap:8px;">
+                  <div style="font-size:10px;color:var(--text-3);line-height:1.45;">
+                    No papel <strong>Servidor</strong>, a primeira ligação pode pedir o UAC para regras de <em>entrada</em> no Firewall (aceite «Sim»).
+                    Se tiver recusado antes, use o botão abaixo. Em proxy corporativo: <strong>Proxy do sistema</strong>.
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    <button type="button" id="btnPermWinApplyFw" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Aplicar regras no firewall (admin)</button>
+                  </div>
                 </div>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                  <button type="button" id="btnPermWinApplyFw" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">Aplicar regras no firewall (admin)</button>
                   <button type="button" id="btnPermWinFirewallAdv" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Firewall e segurança</button>
                   <button type="button" id="btnPermWinProxy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Proxy do sistema</button>
                   <button type="button" id="btnPermWinNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Notificações</button>
@@ -763,7 +787,7 @@ export async function renderDashboard(): Promise<void> {
   };
   // ── Configurações ──────────────────────────────────────────────────────────
 
-  let currentRole = 'server';
+  let currentRole = (cachedSettings?.role as string | undefined) ?? 'server';
 
   const loadCurrentSettings = async () => {
     try {
@@ -834,6 +858,47 @@ export async function renderDashboard(): Promise<void> {
 
     if (expectedWrap) expectedWrap.style.display = role === 'server' ? 'block' : 'none';
 
+    const bannerTitle = document.getElementById('configRoleBannerTitle');
+    const bannerDesc = document.getElementById('configRoleBannerDesc');
+    if (bannerTitle && bannerDesc) {
+      if (role === 'server') {
+        bannerTitle.textContent = 'A configurar como Servidor';
+        bannerDesc.textContent =
+          'Esta máquina fica à escuta na rede. No outro PC, use o papel Cliente e o IP deste computador.';
+      } else {
+        bannerTitle.textContent = 'A configurar como Cliente';
+        bannerDesc.textContent =
+          'Esta máquina liga-se ao anfitrião. Preencha «Endereço do Servidor» com o IP do PC em modo Servidor e use Conectar no painel.';
+      }
+    }
+
+    const helpSrv = document.getElementById('screenNameHelpServer') as HTMLElement | null;
+    const helpCli = document.getElementById('screenNameHelpClient') as HTMLElement | null;
+    if (helpSrv && helpCli) {
+      helpSrv.style.display = role === 'server' ? 'block' : 'none';
+      helpCli.style.display = role === 'client' ? 'block' : 'none';
+    }
+
+    const launchLbl = document.getElementById('launchConnLabel');
+    if (launchLbl) {
+      launchLbl.textContent =
+        role === 'server'
+          ? 'Ao abrir o app, entrar em modo anfitrião (escutar na porta; desligado = liga manualmente com «Conectar» no painel, como no Barrier).'
+          : 'Ao abrir o app, tentar ligar ao servidor automaticamente (use o endereço em «Endereço do Servidor»; desligado = liga só ao premir «Conectar» no painel).';
+    }
+
+    const netS = document.getElementById('netChecklistServer') as HTMLElement | null;
+    const netC = document.getElementById('netChecklistClient') as HTMLElement | null;
+    if (netS) netS.style.display = role === 'server' ? 'block' : 'none';
+    if (netC) netC.style.display = role === 'client' ? 'block' : 'none';
+
+    const permSrv = document.getElementById('permWinServerInbound') as HTMLElement | null;
+    if (permSrv) {
+      permSrv.style.display = role === 'server' ? 'flex' : 'none';
+      permSrv.style.flexDirection = 'column';
+      permSrv.style.gap = '8px';
+    }
+
     if (role === 'server') {
       serverCard.style.cssText = serverCard.style.cssText.replace(/border:[^;]+/, 'border:2px solid var(--cyan)');
       serverCard.style.background = 'linear-gradient(135deg,#0f1824,#0b0c10)';
@@ -854,6 +919,13 @@ export async function renderDashboard(): Promise<void> {
     applyRoleUI(role);
     // switch_role cancela conexão ativa, salva e relança automaticamente
     await invoke('switch_role', { role }).catch(console.warn);
+    await refreshSettings();
+    try {
+      const raw = await invoke<unknown>('get_status');
+      updateDevices(normalizeStatusPayload(raw), cachedSettings ?? null);
+    } catch {
+      /* ignorar */
+    }
     addLog(`Papel alterado para: ${role === 'server' ? 'Servidor' : 'Cliente'} (reconectando...)`, 'sec');
   };
 
@@ -1296,7 +1368,7 @@ export async function renderDashboard(): Promise<void> {
       const peers = await invoke<PeerInfo[]>('discover_peers');
       subtitle.textContent = `${peers.length} dispositivo(s) encontrado(s)`;
       addLog(`Descoberta concluída: ${peers.length} peer(s)`, peers.length > 0 ? 'sec' : 'info');
-      renderDiscoveredDevices(peers);
+      renderDiscoveredDevices(peers, currentRole);
       try {
         const raw = await invoke<unknown>('get_status');
         updateDevices(normalizeStatusPayload(raw), cachedSettings ?? null);
@@ -1494,6 +1566,8 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload | null) 
   // Se não conectado e grid já foi preenchida pela descoberta mDNS, não sobrescrever
   if (grid.dataset.discovered === 'true') return;
 
+  const role = settings?.role ?? 'server';
+
   // Mostrar sempre a máquina local (mesmo sem get_settings ainda)
   const devices = [
     { name: hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
@@ -1502,22 +1576,30 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload | null) 
   renderDeviceCards(grid, devices);
   const subtitle = document.getElementById('deviceSubtitle');
   if (subtitle) {
-    subtitle.textContent = `${hostname} · ${localIpText} · «Atualizar» para buscar outros PCs`;
+    if (role === 'client') {
+      subtitle.textContent = `${hostname} · ${localIpText} · Papel Cliente: use o IP do anfitrião em Configurações · «Atualizar» para descoberta na LAN`;
+    } else {
+      subtitle.textContent = `${hostname} · ${localIpText} · «Atualizar» para ver PCs em Servidor à escuta na rede`;
+    }
   }
 }
 
-function renderDiscoveredDevices(peers: PeerInfo[]) {
+function renderDiscoveredDevices(peers: PeerInfo[], role: string = 'server') {
   const grid = document.getElementById('deviceGrid');
   if (!grid) return;
   // Só marcar como descoberto se encontrou peers — senão deixa o updateDevices atualizar
   grid.dataset.discovered = peers.length > 0 ? 'true' : 'false';
 
   if (peers.length === 0) {
+    const emptyClient =
+      'A descoberta lista anfitriões (papel Servidor) à escuta. Se continuar vazio, confira o IP do servidor em Configurações → «Endereço do Servidor» e use Conectar no painel — o destino é sempre o PC em Servidor, não este.';
+    const emptyServer =
+      'Só aparecem PCs em papel Servidor com Conectar ativo. No computador que recebe o controlo, use papel Cliente e o IP da máquina que está em Servidor — não tente ligar ao IP do Cliente.';
     grid.innerHTML = `
       <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-3);">
         <div style="font-size:32px;margin-bottom:12px;">🔍</div>
         <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Nenhum Movex à escuta na rede</div>
-        <div style="font-size:12px;">Só aparecem PCs em papel Servidor com Conectar ativo. Se o outro está como Cliente, nesse computador use papel Cliente e informe o IP da máquina que está em Servidor — não tente ligar ao IP do Cliente.</div>
+        <div style="font-size:12px;">${role === 'client' ? emptyClient : emptyServer}</div>
       </div>`;
     return;
   }

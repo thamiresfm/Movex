@@ -47,6 +47,24 @@ jobs:
       - name: Testes unitários
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
 
+      - name: Configurar Node.js (build frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend (Vite)
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+
+      - name: Publicar artefato do frontend (dist)
+        uses: actions/upload-artifact@v4
+        with:
+          name: movex-frontend-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
   # ──────────────────────────────────────────────────────────────
   # Release no GitHub (só tags v*) — antes dos builds para permitir paralelismo
   # ──────────────────────────────────────────────────────────────
