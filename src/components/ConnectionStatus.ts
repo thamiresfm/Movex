@@ -4,6 +4,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { onEvent } from '../utils/tauri-events';
+import { addLog } from './Logs';
 
 export interface StatusPayload {
   connected: boolean;
@@ -74,6 +75,13 @@ export async function initStatusListener(): Promise<() => void> {
   await onEvent<unknown>("movex://status-changed", (raw) => {
     const status = normalizeStatusPayload(raw);
     handlers.forEach((h) => h(status));
+  });
+
+  // Falhas/sucessos de ligação: aparecem no painel de logs mesmo com notificações do SO desligadas (especialmente macOS).
+  await onEvent<{ level: string; message: string }>("movex://connection-log", (p) => {
+    const lv =
+      p.level === "warn" || p.level === "warning" ? "warn" : p.level === "sec" ? "sec" : "info";
+    addLog(p.message, lv);
   });
 
   // Carregar estado inicial (handlers já devem estar registados — ver Dashboard)

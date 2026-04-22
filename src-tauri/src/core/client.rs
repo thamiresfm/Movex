@@ -48,7 +48,7 @@ pub async fn connect_to_addr(
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 warn!("Falha ao conectar em {}: {}", target, e);
-                state.send_notification(
+                state.user_visible_connection_error(
                     "Movex — Conexão",
                     &format!(
                         "Não foi possível alcançar {}. Verifique IP e firewall (porta {}). {} No PC em Servidor: na primeira ligação aceite o UAC para o Firewall (ou Configurações → Aplicar regras).",
@@ -60,7 +60,7 @@ pub async fn connect_to_addr(
             }
             Err(_) => {
                 warn!("Timeout ao conectar em {}", target);
-                state.send_notification(
+                state.user_visible_connection_error(
                     "Movex — Conexão",
                     &format!("Tempo esgotado ao conectar a {}. Rede ou firewall podem estar bloqueando.", target),
                 ).await;
@@ -78,7 +78,7 @@ pub async fn connect_to_addr(
         Ok(s) => s,
         Err(e) => {
             warn!("Falha TLS ao conectar em {}: {}", target, e);
-            state.send_notification(
+            state.user_visible_connection_error(
                 "Movex — TLS",
                 "Falha no handshake TLS. Se o servidor foi reinstalado, apague o arquivo de confiança: em Configurações use «Resetar» ou remova server_cert em ~/.movex nas duas máquinas.",
             ).await;
@@ -113,12 +113,15 @@ pub async fn connect_to_addr(
             *started = Some(std::time::Instant::now());
         }
         crate::emit_status_to_main(&state).await;
+        state
+            .user_visible_connection_success(&format!("Ligado a «{peer_hostname}» ({target})."))
+            .await;
         let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
         { *state.message_tx.lock().await = Some(msg_tx); }
         run_session(&mut tls, state.clone(), &mut msg_rx, cancel).await;
         { *state.message_tx.lock().await = None; }
     } else {
-        state.send_notification(
+        state.user_visible_connection_error(
             "Movex — Conexão",
             "Handshake falhou: confira versão do Movex e rede (TLS).",
         ).await;
@@ -181,14 +184,14 @@ where
         Ok(Message::HelloReject { reason }) => {
             warn!("Servidor rejeitou o handshake: {}", reason);
             state
-                .send_notification("Movex — Nome do ecrã", &reason)
+                .user_visible_connection_error("Movex — Nome do ecrã", &reason)
                 .await;
             Err(())
         }
         Ok(Message::ConnectionRejected { reason }) => {
             warn!("Conexão rejeitada pelo servidor: {}", reason);
             state
-                .send_notification("Movex — Conexão recusada", &reason)
+                .user_visible_connection_error("Movex — Conexão recusada", &reason)
                 .await;
             {
                 let mut status = state.connection_status.lock().await;
@@ -245,7 +248,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
         let Some(server_addr) = maybe_addr else {
             warn!("Cliente sem IP do servidor — não use 127.0.0.1 implícito (defina nas opções ou conecte pelo cartão na rede)");
             state
-                .send_notification(
+                .user_visible_connection_error(
                     "Movex",
                     "Defina o IP do servidor nas configurações ou toque num PC na lista (Rede → Atualizar).",
                 )
@@ -313,6 +316,11 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                                 *started = Some(std::time::Instant::now());
                             }
                             crate::emit_status_to_main(&state).await;
+                            state
+                                .user_visible_connection_success(&format!(
+                                    "Ligado ao servidor «{peer_hostname}» ({addr})."
+                                ))
+                                .await;
 
                             let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
                             { *state.message_tx.lock().await = Some(msg_tx); }
@@ -321,7 +329,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                         } else {
                             warn!("Handshake falhou — verifique filtro de nome de ecrã e versão do Movex");
                             state
-                                .send_notification(
+                                .user_visible_connection_error(
                                     "Movex",
                                     "Handshake falhou: verifique filtro de nome de ecrã no servidor e mesma versão do app.",
                                 )
@@ -333,21 +341,28 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                     Err(e) => {
                         warn!("Falha no TLS handshake: {}", e);
                         state
-                            .send_notification(
+                            .user_visible_connection_error(
                                 "Movex — TLS",
                                 "Não foi possível estabelecer TLS. Confirme IP/porta, firewall no PC servidor e mesma LAN. Se reinstalou o Movex no servidor ou mudou de PC: Configurações → Esquecer certificado TLS (ou Resetar).",
                             )
                             .await;
-                        crate::emit_status_to_main(&state).await;
+                        connection_failed_client(&state).await;
+                        return;
                     }
                 }
             }
             Ok(Err(e)) => {
                 warn!("Falha ao conectar em {}: {}", addr, e);
                 tcp_unreachable_streak = tcp_unreachable_streak.saturating_add(1);
+                state
+                    .log_to_connection_panel(
+                        "warn",
+                        &format!("TCP indisponível {addr}: {e} (tentativa {tcp_unreachable_streak})"),
+                    )
+                    .await;
                 if tcp_unreachable_streak == 3 {
                     state
-                        .send_notification(
+                        .user_visible_connection_error(
                             "Movex — Não alcança o servidor",
                             &format!(
                                 "Confira IP, rede e firewall (porta). {} No Servidor: aceite o UAC do Firewall na 1.ª ligação.",
@@ -361,9 +376,15 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             Err(_) => {
                 warn!("Timeout ao conectar em {}", addr);
                 tcp_unreachable_streak = tcp_unreachable_streak.saturating_add(1);
+                state
+                    .log_to_connection_panel(
+                        "warn",
+                        &format!("Timeout TCP ao conectar a {addr} (tentativa {tcp_unreachable_streak})"),
+                    )
+                    .await;
                 if tcp_unreachable_streak == 3 {
                     state
-                        .send_notification(
+                        .user_visible_connection_error(
                             "Movex — Timeout na rede",
                             &format!(
                                 "Timeout ao alcançar o servidor. Rede ou firewall. {} No Servidor: aceite o UAC do Firewall na 1.ª ligação.",

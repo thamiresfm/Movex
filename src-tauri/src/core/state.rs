@@ -109,6 +109,68 @@ impl AppState {
         }
     }
 
+    /// Falha de ligação: mostra notificação **mesmo** com «notificações» desligadas (macOS/Windows) e
+    /// regista o texto no painel de logs via evento.
+    pub async fn user_visible_connection_error(&self, title: &str, body: &str) {
+        use serde::Serialize;
+        use tauri::Emitter;
+        #[derive(Serialize, Clone)]
+        struct ConnLogPayload {
+            level: String,
+            message: String,
+        }
+        let app = self.app_handle.lock().await.clone();
+        let Some(app) = app else { return; };
+        crate::core::notifications::notify(&app, title, body);
+        let _ = app.emit(
+            "movex://connection-log",
+            ConnLogPayload {
+                level: "warn".to_string(),
+                message: format!("{title} — {body}"),
+            },
+        );
+    }
+
+    /// Só a área de logs (sem toast) — reconexão sem bombardear o centro de notificações.
+    pub async fn log_to_connection_panel(&self, level: &str, message: &str) {
+        use serde::Serialize;
+        use tauri::Emitter;
+        #[derive(Serialize, Clone)]
+        struct ConnLogPayload {
+            level: String,
+            message: String,
+        }
+        let app = self.app_handle.lock().await.clone();
+        let Some(app) = app else { return; };
+        let _ = app.emit(
+            "movex://connection-log",
+            ConnLogPayload {
+                level: level.to_string(),
+                message: message.to_string(),
+            },
+        );
+    }
+
+    /// Sucesso: linha de log visível ainda com notificações do SO desligadas.
+    pub async fn user_visible_connection_success(&self, message: &str) {
+        use serde::Serialize;
+        use tauri::Emitter;
+        #[derive(Serialize, Clone)]
+        struct ConnLogPayload {
+            level: String,
+            message: String,
+        }
+        let app = self.app_handle.lock().await.clone();
+        let Some(app) = app else { return; };
+        let _ = app.emit(
+            "movex://connection-log",
+            ConnLogPayload {
+                level: "sec".to_string(),
+                message: message.to_string(),
+            },
+        );
+    }
+
     /// Gera próximo ID de transferência (thread-safe)
     pub async fn next_transfer_id(&self) -> u32 {
         let mut id = self.next_transfer_id.lock().await;
