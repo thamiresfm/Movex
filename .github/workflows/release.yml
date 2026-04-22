@@ -1,10 +1,12 @@
-# Release e binários (macOS/Windows) — só ao criar/push de tag v* (evita jobs skipped em main).
+# Gera GitHub Release + instaladores .dmg / .exe / .msi. Dispara SÓ com: git tag v* && git push origin v*
+# (Push em `main` não dispara este ficheiro — isso fica no workflow `ci.yml`.)
 name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  # Execução manual: útil para repetir após ajuste de segredos (usa o commit/tag atual do ref escolhido)
   workflow_dispatch: {}
 
 permissions:

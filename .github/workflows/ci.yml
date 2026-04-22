@@ -61,3 +61,24 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Resumo (instaladores nativos e workflow «Release»)
+        if: success()
+        run: |
+          {
+            echo "### O que este workflow faz"
+            echo "- Testes Rust (Clippy + unitários) e \`npm run build\` (Vite)."
+            echo "- Artefato **movex-frontend-dist** = pasta \`dist/\` (só o frontend empacotado)."
+            echo ""
+            echo "### Por que não há .dmg / .exe / .msi aqui"
+            echo "Instaladores **macOS** e **Windows** são gerados pelo workflow **Release**, que **só corre** ao fazer **push de uma tag** de versão, por exemplo \`v0.3.7\`."
+            echo ""
+            echo "**Comandos (local):**"
+            echo '```'
+            echo "git tag v0.3.7   # ou a versão desejada"
+            echo "git push origin v0.3.7"
+            echo '```'
+            echo "Depois, em **Actions** → workflow **Release**, vê os jobs *Criar GitHub Release*, *Build macOS* e *Build Windows*."
+            echo ""
+            echo "Na lista de runs, o nome do workflow de CI é **CI** (não «Build Movex» — isso era o ficheiro antigo, já removido)."
+          } >> "$GITHUB_STEP_SUMMARY"
