@@ -1,4 +1,4 @@
-# CI em push para main e em PRs — sem jobs "skipped" (só o que aplica a este ref).
+# CI em push para main e em PRs — build (Rust + Vite) e artefato movex-frontend-dist.
 name: CI
 
 on:
@@ -8,6 +8,11 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Evita filas desnecessárias no mesmo ref
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -16,7 +21,7 @@ env:
 
 jobs:
   test:
-    name: Lint, testes Rust e build frontend
+    name: Build (Rust + Vite) e artefato dist
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -54,13 +59,23 @@ jobs:
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
           npm run build
 
-      - name: Publicar artefato do frontend (dist)
+      - name: Metadados do build (rastreio)
+        run: |
+          {
+            echo "ref=${{ github.ref }}"
+            echo "sha=${{ github.sha }}"
+            echo "run_id=${{ github.run_id }}"
+            node -e "process.stdout.write('version=' + require('./package.json').version + '\n')"
+          } | tee dist/BUILD-INFO.txt
+
+      - name: Publicar artefato (frontend Vite)
         uses: actions/upload-artifact@v4
         with:
           name: movex-frontend-dist
           path: dist/
           if-no-files-found: error
-          retention-days: 14
+          compression-level: 6
+          retention-days: 30
 
       - name: Resumo (CI vs Release)
         if: success()
@@ -72,7 +87,7 @@ jobs:
           |------|----------|
           | **Rust** | `cargo clippy` (lib) e `cargo test` (lib) |
           | **Web** | `npm run build` (Vite) |
-          | **Artefato** | `movex-frontend-dist` = pasta `dist/` (só o frontend, não é instalador) |
+          | **Artefato** | `movex-frontend-dist` = pasta `dist/` + `BUILD-INFO.txt` (versão, ref, SHA) |
 
           ## Instaladores .dmg / .exe / .msi
 
