@@ -81,14 +81,14 @@ impl InputCapture for MacOsCapture {
                         }
                     }
 
-                    let (screen_w, screen_h) = get_screen_size();
                     let input = match event_type {
                         CGEventType::MouseMoved => {
+                            // Quartz: posição em pontos no espaço global; `bounds` do ecrã principal
+                            // está em pontos. Não usar pixels_wide aqui — em Retina, loc/pixels
+                            // nunca chega a 1.0 na borda e o `check_boundary` do servidor falha.
                             let loc = event.location();
-                            Some(InputEvent::MouseMove {
-                                x: (loc.x / screen_w) as f32,
-                                y: (loc.y / screen_h) as f32,
-                            })
+                            let (nx, ny) = normalize_mouse_for_primary_display(loc.x, loc.y);
+                            Some(InputEvent::MouseMove { x: nx, y: ny })
                         }
                         CGEventType::LeftMouseDown => Some(InputEvent::MouseButton {
                             button: MouseButton::Left, pressed: true,
@@ -211,11 +211,17 @@ impl InputInjector for MacOsInjector {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|_| "Falha ao criar CGEventSource".to_string())?;
 
-        let (sw, sh) = get_screen_size();
-
         match event {
             InputEvent::MouseMove { x, y } => {
-                let pt = CGPoint { x: x as f64 * sw, y: y as f64 * sh };
+                // Inverter a normalização de `normalize_mouse_for_primary_display`: (0,0) topo-esq, (1,1) base-dir.
+                use core_graphics::display::CGDisplay;
+                let d = CGDisplay::main();
+                let b = d.bounds();
+                let w_pt = b.size.width;
+                let h_pt = b.size.height;
+                let gx = b.origin.x + (x as f64) * w_pt;
+                let gy = b.origin.y + (1.0 - y as f64) * h_pt;
+                let pt = CGPoint { x: gx, y: gy };
                 let ev = CGEvent::new_mouse_event(source, CGEventType::MouseMoved, pt, CGMouseButton::Left)
                     .map_err(|_| "Falha MouseMove".to_string())?;
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
@@ -258,10 +264,21 @@ impl InputInjector for MacOsInjector {
     }
 }
 
-fn get_screen_size() -> (f64, f64) {
+/// Converte `event.location()` (pontos, origem Quartz) para normalizados 0..1 com (0,0) no canto
+/// **superior esquerdo** e (1,1) no inferior direito, alinhado com `screen::boundary` e `ScreenLayout`
+/// em pixels no servidor.
+fn normalize_mouse_for_primary_display(loc_x: f64, loc_y: f64) -> (f32, f32) {
     use core_graphics::display::CGDisplay;
     let d = CGDisplay::main();
-    (d.pixels_wide() as f64, d.pixels_high() as f64)
+    let b = d.bounds();
+    let w_pt = b.size.width.max(1.0);
+    let h_pt = b.size.height.max(1.0);
+    let rel_x = loc_x - b.origin.x;
+    // rel_y: 0 na base do retângulo do ecrã, h_pt no topo (eixo Y Quartz).
+    let rel_y = loc_y - b.origin.y;
+    let nx = (rel_x / w_pt).clamp(0.0, 1.0) as f32;
+    let ny = ((h_pt - rel_y) / h_pt).clamp(0.0, 1.0) as f32;
+    (nx, ny)
 }
 
 fn get_cursor_position() -> Result<(f64, f64), ()> {
