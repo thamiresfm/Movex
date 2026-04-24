@@ -1,6 +1,6 @@
 [package]
 name = "movex"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 description = "KVM por software — controle múltiplos computadores com um teclado e mouse"
 authors = ["Thamires Fernandes Mendes"]

@@ -304,14 +304,14 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                             do_handshake(&mut tls, &screen_name, &psk_hex, &state, &cancel).await
                         {
                             info!("Conectado ao servidor: {}", peer_hostname);
-                            policy.reset();
-                            {
-                                let mut status = state.connection_status.lock().await;
-                                *status = ConnectionStatus::Connected {
+                                policy.reset();
+                                {
+                                    let mut status = state.connection_status.lock().await;
+                                    *status = ConnectionStatus::Connected {
                                     peer_hostname: peer_hostname.clone(),
                                     peer_addr: addr.clone(),
-                                    latency_ms: 0,
-                                };
+                                        latency_ms: 0,
+                                    };
                                 let mut started = state.session_started_at.lock().await;
                                 *started = Some(std::time::Instant::now());
                             }
@@ -487,17 +487,17 @@ async fn run_session<S>(
 
             result = recv_message(stream) => {
                 match result {
-                    Ok(Message::EnterScreen) => {
+            Ok(Message::EnterScreen) => {
                         state.active_screen_remote.store(true, std::sync::atomic::Ordering::Release);
-                        let mut active = state.active_screen.lock().await;
-                        *active = ActiveScreen::Remote;
+                let mut active = state.active_screen.lock().await;
+                *active = ActiveScreen::Remote;
                         info!("Cursor entrou nesta máquina");
-                    }
-                    Ok(Message::LeaveScreen) => {
+            }
+            Ok(Message::LeaveScreen) => {
                         state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
-                        let mut active = state.active_screen.lock().await;
-                        *active = ActiveScreen::Local;
-                    }
+                let mut active = state.active_screen.lock().await;
+                *active = ActiveScreen::Local;
+            }
                     Ok(Message::Input(event)) => {
                         inject_event(event);
                     }
@@ -534,9 +534,9 @@ async fn run_session<S>(
                     Ok(Message::FileRetry { id }) => {
                         warn!("Peer solicitou reenvio do arquivo id={}", id);
                     }
-                    Ok(Message::Ping) => {
-                        let _ = send_message(stream, &Message::Pong).await;
-                    }
+            Ok(Message::Ping) => {
+                let _ = send_message(stream, &Message::Pong).await;
+            }
                     Ok(Message::Pong) => {
                         if let Some(sent) = ping_sent_at.take() {
                             let rtt = sent.elapsed().as_millis() as u32;
@@ -547,18 +547,18 @@ async fn run_session<S>(
                             drop(status);
                             crate::emit_status_to_main(&state).await;
                         }
-                    }
-                    Ok(Message::Disconnect { reason }) => {
-                        info!("Servidor desconectou: {}", reason);
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("Erro na sessão: {}", e);
-                        break;
-                    }
-                }
             }
+            Ok(Message::Disconnect { reason }) => {
+                info!("Servidor desconectou: {}", reason);
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Erro na sessão: {}", e);
+                break;
+            }
+        }
+    }
         }
     }
 

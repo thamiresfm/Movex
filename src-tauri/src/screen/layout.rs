@@ -72,6 +72,19 @@ impl MultiMonitorLayout {
     }
 }
 
+/// Ponto do espaço virtual (como `MSLLHOOKSTRUCT.pt` no Windows) normalizado
+/// 0.0..=1.0 relativamente a um ecrã (ex. monitor primário). `Y` cresce para baixo.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn normalize_point_against_display_rect(
+    left: i32, top: i32, width: u32, height: u32, x: i32, y: i32,
+) -> (f32, f32) {
+    let wf = width.max(1) as f32;
+    let hf = height.max(1) as f32;
+    let nx = ((x - left) as f32 / wf).clamp(0.0, 1.0);
+    let ny = ((y - top) as f32 / hf).clamp(0.0, 1.0);
+    (nx, ny)
+}
+
 /// Detecta monitores disponíveis na plataforma atual
 pub fn detect_monitors() -> MultiMonitorLayout {
     #[cfg(target_os = "macos")]
@@ -221,5 +234,20 @@ mod tests {
         let (nx, ny) = layout.to_normalized(960, 540);
         assert!((nx - 0.5).abs() < 0.001);
         assert!((ny - 0.5).abs() < 0.001);
+    }
+
+    /// Regressão: primário com offset no espaço virtual; `pt/1920` dava ~1,5 no centro
+    /// (código antigo) e a borda nunca alinhava com o servidor.
+    #[test]
+    fn normalize_against_offset_primary_gives_center() {
+        let (nx, ny) = normalize_point_against_display_rect(1920, 0, 1920, 1080, 2880, 540);
+        assert!((nx - 0.5).abs() < 0.01, "nx={}", nx);
+        assert!((ny - 0.5).abs() < 0.01, "ny={}", ny);
+    }
+
+    #[test]
+    fn normalize_against_offset_primary_right_edge() {
+        let (nx, _ny) = normalize_point_against_display_rect(1920, 0, 1920, 1080, 3839, 100);
+        assert!(nx > 0.99, "nx={} devia aproximar 1.0 na borda direita", nx);
     }
 }

@@ -21,6 +21,25 @@ fn set_hook_cb(cb: Option<Arc<HookCallback>>) {
     }
 }
 
+static PRIMARY_BOUNDS: OnceLock<(i32, i32, u32, u32)> = OnceLock::new();
+
+fn primary_display_bounds() -> (i32, i32, u32, u32) {
+    *PRIMARY_BOUNDS.get_or_init(|| {
+        let mlay = crate::screen::layout::detect_monitors();
+        mlay.monitors
+            .iter()
+            .find(|m| m.is_primary)
+            .or_else(|| mlay.monitors.first())
+            .map(|m| (m.x, m.y, m.width, m.height))
+            .unwrap_or((0, 0, 1920, 1080))
+    })
+}
+
+fn normalize_cursor_to_primary_01(x: i32, y: i32) -> (f32, f32) {
+    let (left, top, w, h) = primary_display_bounds();
+    crate::screen::layout::normalize_point_against_display_rect(left, top, w, h, x, y)
+}
+
 fn call_hook_cb(event: InputEvent) {
     if let Ok(r) = get_hook_cell().read() {
         if let Some(cb) = r.as_ref() {
@@ -73,13 +92,12 @@ impl InputCapture for WindowsCapture {
 
                 if n_code == HC_ACTION as i32 {
                     let data = &*(l_param.0 as *const MSLLHOOKSTRUCT);
-                    let screen = get_screen_size_win();
 
                     let event = match w_param.0 as u32 {
-                        v if v == WM_MOUSEMOVE => Some(InputEvent::MouseMove {
-                            x: data.pt.x as f32 / screen.0,
-                            y: data.pt.y as f32 / screen.1,
-                        }),
+                        v if v == WM_MOUSEMOVE => {
+                            let (nx, ny) = normalize_cursor_to_primary_01(data.pt.x, data.pt.y);
+                            Some(InputEvent::MouseMove { x: nx, y: ny })
+                        }
                         v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {
                             button: MouseButton::Left, pressed: true,
                         }),
@@ -339,16 +357,6 @@ fn make_key_input(vk: u16, key_up: bool) -> windows::Win32::UI::Input::KeyboardA
                 dwExtraInfo: 0,
             },
         },
-    }
-}
-
-fn get_screen_size_win() -> (f32, f32) {
-    unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-        (
-            GetSystemMetrics(SM_CXSCREEN) as f32,
-            GetSystemMetrics(SM_CYSCREEN) as f32,
-        )
     }
 }
 

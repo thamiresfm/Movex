@@ -213,7 +213,7 @@ export async function renderDashboard(): Promise<void> {
               <div>
                 <div class="section-title">Dispositivos</div>
                 <div class="section-sub" id="deviceSubtitle">Carregando esta máquina…</div>
-              </div>
+            </div>
               <div style="display:flex;gap:8px;">
                 <button type="button" class="btn btn-outline" id="btnRefreshDevices">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.48"/></svg>
@@ -336,7 +336,7 @@ export async function renderDashboard(): Promise<void> {
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="1.8"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
                   <span style="font-size:13px;font-weight:600;color:var(--text);">Porta TCP</span>
-                </div>
+                  </div>
                 <div style="position:relative;">
                   <input type="number" value="24800" id="portInput" style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 80px 10px 14px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:600;color:var(--text);outline:none;" />
                   <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;">Padrão</span>
@@ -418,7 +418,7 @@ export async function renderDashboard(): Promise<void> {
                 <div style="display:flex;gap:8px;">
                   <button id="themeDark" data-theme="dark" style="flex:1;padding:8px;border-radius:8px;border:2px solid var(--cyan);background:var(--bg-2);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;">🌙 Escuro</button>
                   <button id="themeLight" data-theme="light" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;">☀️ Claro</button>
-                </div>
+              </div>
               </div>
               <!-- Modo Lock -->
               <div class="card">
@@ -439,7 +439,7 @@ export async function renderDashboard(): Promise<void> {
                 <div>
                   <div style="font-size:13px;font-weight:600;color:var(--text);">🔔 Notificações do Sistema</div>
                   <div style="font-size:11px;color:var(--text-3);">Avisos ao conectar, desconectar e receber arquivos</div>
-                </div>
+              </div>
                 <label class="toggle"><input type="checkbox" id="notifToggle" checked /><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
               </div>
               <div style="display:flex;align-items:center;gap:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
@@ -479,19 +479,19 @@ export async function renderDashboard(): Promise<void> {
                   <button type="button" id="btnPermWinFirewall" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Firewall (lista clássica)</button>
                   <button type="button" id="btnPermWinPrivacy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Privacidade</button>
                 </div>
-              </div>
             </div>
+          </div>
 
             <!-- Peers recentes -->
             <div class="card" style="margin-bottom:14px;">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
                 <div style="font-size:13px;font-weight:600;color:var(--text);">🕐 Conexões Recentes</div>
                 <button id="btnClearHistory" class="btn btn-outline" style="font-size:10px;padding:4px 10px;">Limpar</button>
-              </div>
+        </div>
               <div id="recentPeersList" style="display:flex;flex-direction:column;gap:6px;">
                 <div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>
-              </div>
-            </div>
+      </div>
+    </div>
 
             <!-- Ações -->
             <div style="display:flex;align-items:center;justify-content:space-between;padding-top:16px;border-top:1px solid var(--border);">
@@ -981,7 +981,7 @@ export async function renderDashboard(): Promise<void> {
         (document.getElementById('screenNameInput') as HTMLInputElement)?.value?.trim() || s.hostname;
       const expectedRaw =
         (document.getElementById('expectedClientScreenInput') as HTMLInputElement)?.value?.trim() || '';
-      await invoke('save_settings', {
+    await invoke('save_settings', {
         hostname: s.hostname,
         screenName,
         expectedClientScreenName: expectedRaw ? expectedRaw : null,
@@ -1545,7 +1545,7 @@ function updateDevices(status: StatusPayload, settings: SettingsPayload | null) 
   // Se conectado: sempre mostrar as máquinas reais (ignora descoberta anterior)
   if (status.connected) {
     grid.dataset.discovered = 'false'; // permite atualizar
-    const devices = [
+  const devices = [
       { name: hostname, ip: localIpText, icon: '🖥️', online: true, addr: null as string|null, port: 0 },
       {
         name: status.peer_hostname ?? 'Peer',

@@ -1,13 +1,12 @@
 # Gera GitHub Release + instaladores .dmg / .exe / .msi. Dispara SÓ com: git tag v* && git push origin v*
 # (Push em `main` não dispara este ficheiro — isso fica no workflow `ci.yml`.)
+# Build **sem** Release (só artefatos na aba Actions): workflow *Desktop — DMG e EXE (artefatos)*.
 name: Release
 
 on:
   push:
     tags:
       - 'v*'
-  # Execução manual: útil para repetir após ajuste de segredos (usa o commit/tag atual do ref escolhido)
-  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -72,6 +71,7 @@ jobs:
         id: gh_release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           name: "Movex ${{ github.ref_name }}"
           draft: false
           prerelease: false

@@ -91,14 +91,17 @@ jobs:
 
           ## Instaladores .dmg / .exe / .msi
 
-          São gerados pelo workflow **Release**, que **só dispara** com **push de uma tag** `v*`, por exemplo:
+          | Objetivo | Workflow | Como disparar |
+          |----------|----------|----------------|
+          | **Artefatos** na aba *Actions* (sem Release) | **Desktop — DMG e EXE (artefatos)** | *Actions* → escolher o workflow → *Run workflow* |
+          | **GitHub Release** com anexos | **Release** | Push de tag `v*` (ex.: abaixo) |
 
           ```bash
-          git tag v0.3.7
-          git push origin v0.3.7
+          git tag v0.3.9
+          git push origin v0.3.9
           ```
 
-          Depois: **Actions** → **Release** → ver *Criar GitHub Release*, *Build macOS*, *Build Windows* e os ficheiros em **Releases**.
+          Depois: **Releases** no GitHub, ou **Actions** → *Desktop — …* → *Artefatos do run*.
 
           O rodapé *Job summary generated at run-time* vem do GitHub (não é editável por este repositório).
           EOF
