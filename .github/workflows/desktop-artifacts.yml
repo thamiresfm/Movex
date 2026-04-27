@@ -1,10 +1,23 @@
 # Gera instaladores e publica na aba *Actions* (Artefatos) — **não** cria GitHub Release.
-# Útil para testar a última *main* sem tag. Disparo: Actions → *Desktop — DMG e EXE* → *Run workflow*.
-# Para anexar a uma Release, use o workflow *Release* com `git tag v* && git push origin v*`.
+#
+# Disparo:
+#   - Manual: repositório → **Actions** → *Desktop — DMG e EXE* → **Run workflow**
+#   - Automático: **push** em `main` que altere `src/`, Tauri, dependências ou este workflow
+#
+# **Artefatos** (fim de cada *job*): *Movex-macos-universal-dmg* (.dmg) e *Movex-windows-exe-msi* (.exe + .msi).
+# Para ficheiros na página **Releases** do GitHub, use: `git tag v0.x.y && git push origin v0.x.y` (workflow *Release*).
 name: 'Desktop — DMG e EXE (artefatos)'
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'src-tauri/**'
+      - '.github/workflows/desktop-artifacts.yml'
 
 concurrency:
   group: desktop-artifacts-${{ github.ref }}
@@ -60,6 +73,12 @@ jobs:
           # DMG é já comprimido
           compression-level: 0
 
+      - name: Resumo
+        if: success()
+        run: |
+          echo "## Instalador macOS (.dmg)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artefato: **Movex-macos-universal-dmg** — faça download no final do job." >> "$GITHUB_STEP_SUMMARY"
+
   windows-exe:
     name: Windows — .exe / .msi
     runs-on: windows-latest
@@ -104,3 +123,10 @@ jobs:
             src-tauri/target/**/release/bundle/msi/*.msi
           if-no-files-found: warn
           compression-level: 0
+
+      - name: Resumo
+        if: success()
+        shell: bash
+        run: |
+          echo "## Instaladores Windows (.exe / .msi)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artefato: **Movex-windows-exe-msi** — contém o instalador NSIS (.exe) e, se existir, o .msi." >> "$GITHUB_STEP_SUMMARY"

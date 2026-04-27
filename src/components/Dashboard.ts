@@ -32,6 +32,7 @@ function formatLocalNetworkLine(port: number, ipv4Csv: string): string {
 
 interface StatusPayload {
   connected: boolean;
+  in_session: boolean;
   status_text: string;
   peer_hostname?: string;
   /** Endereço do peer quando conectado (ex.: 192.168.1.5:24800). */
@@ -600,7 +601,8 @@ export async function renderDashboard(): Promise<void> {
         const t = (status.status_text ?? '').trim();
         line.textContent = t || (status.connected ? 'Conectado' : 'Desconectado');
         const waiting = /aguardando|conectando|reconect/i.test(t);
-        line.style.color = status.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
+        const link = status.in_session || status.connected;
+        line.style.color = link || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
     }
     try {
@@ -632,7 +634,7 @@ export async function renderDashboard(): Promise<void> {
       }
 
       const nodesSummary = document.getElementById('nodesLabel');
-      if (nodesSummary && !status.connected) {
+      if (nodesSummary && !status.connected && !status.in_session) {
         const parts = movexLocalIpv4Cache.split(' · ').filter(Boolean);
         nodesSummary.textContent =
           parts.length > 0
@@ -668,13 +670,14 @@ export async function renderDashboard(): Promise<void> {
       const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;
       const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement;
       if (btnConnect && btnDisconnect) {
-        btnConnect.style.display = status.connected ? 'none' : 'inline-flex';
-        btnDisconnect.style.display = status.connected ? 'inline-flex' : 'none';
+        const on = status.in_session;
+        btnConnect.style.display = on ? 'none' : 'inline-flex';
+        btnDisconnect.style.display = on ? 'inline-flex' : 'none';
       }
       updateDevices(status, settings ?? null);
       // Mostrar seletor de posição quando conectado
       const posSelector = document.getElementById('peerPositionSelector');
-      if (posSelector) posSelector.style.display = status.connected ? 'block' : 'none';
+      if (posSelector) posSelector.style.display = status.in_session ? 'block' : 'none';
       // Borda luminosa — cliente ativo
       {
         const role = settings?.role ?? 'server';
@@ -1116,26 +1119,31 @@ export async function renderDashboard(): Promise<void> {
       lineEl.textContent = 'A iniciar…';
       lineEl.style.color = 'var(--cyan)';
     }
-    await invoke('start_connection').catch((e: unknown) => {
+    try {
+      await invoke('start_connection');
+    } catch (e: unknown) {
       addLog(`Erro: ${e}`, 'warn');
       if (lineEl) {
         lineEl.textContent = `Erro: ${e}`;
         lineEl.style.color = 'var(--warn)';
       }
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    try {
-      const raw = await invoke<unknown>('get_status');
-      const st = normalizeStatusPayload(raw);
+      navTo('painel');
+      return;
+    }
+    // O servidor arranca numa task; vários `get_status` até refletir Listening/Connecting.
+    let st = normalizeStatusPayload(await invoke<unknown>('get_status'));
+    for (let i = 0; i < 20 && !st.in_session && !st.connected; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      st = normalizeStatusPayload(await invoke<unknown>('get_status'));
+    }
+    {
       const el = document.getElementById('panelConnStatus');
       if (el) {
         const t = (st.status_text ?? '').trim();
-        el.textContent = t || 'A iniciar…';
+        el.textContent = t || (st.in_session ? 'A aguardar…' : 'Desconectado');
         const waiting = /aguardando|conectando|reconect/i.test(t);
-        el.style.color = st.connected || waiting ? 'var(--cyan)' : 'var(--text-2)';
+        el.style.color = st.connected || st.in_session || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
-    } catch {
-      /* get_status pode falhar fora do Tauri */
     }
     navTo('painel');
   };
@@ -1503,7 +1511,7 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
   // Usar createElement + textContent para evitar XSS (hostname/peer_hostname vêm da rede)
   map.innerHTML = '';
 
-  const makeCard = (isLocal: boolean, hostname: string, active: boolean, connected: boolean) => {
+  const makeCard = (isLocal: boolean, hostname: string, active: boolean, remoteLine: string) => {
     const card = document.createElement('div');
     card.draggable = true;
     card.style.cssText = `background:${active?'linear-gradient(160deg,#0f1824,#0d1520)':'var(--bg-4)'};border:1.5px solid ${active?'var(--cyan)':'var(--border)'};border-radius:12px;padding:18px 20px 14px;width:148px;text-align:center;cursor:grab;${active?'box-shadow:0 0 20px rgba(0,212,255,.12);':''}`;
@@ -1515,20 +1523,26 @@ function updateScreenMap(settings: SettingsPayload, status: StatusPayload) {
     name.textContent = hostname; // textContent — sem XSS
     const statusEl = document.createElement('div');
     statusEl.style.cssText = `font-size:10px;color:${active?'var(--cyan)':'var(--text-3)'};margin-top:3px;`;
-    statusEl.textContent = isLocal ? (active ? '● ATIVO' : 'em espera') : (connected ? '● CONECTADO' : 'desconectado');
+    statusEl.textContent = isLocal ? (active ? '● ATIVO' : 'em espera') : remoteLine;
     card.appendChild(icon);
     card.appendChild(name);
     card.appendChild(statusEl);
     return card;
   };
 
+  const remoteLine = status.connected
+    ? '● LIGADO AO PAR'
+    : status.in_session
+      ? '◐ sessão (à escuta / a ligar…)'
+      : 'desconectado';
+
   const localLabel = (settings.screen_name?.trim() || settings.hostname).trim();
-  map.appendChild(makeCard(true, localLabel, isActive, false));
+  map.appendChild(makeCard(true, localLabel, isActive, ''));
   const arrow = document.createElement('div');
   arrow.style.cssText = 'color:var(--text-3);font-size:20px;';
   arrow.textContent = '⇄';
   map.appendChild(arrow);
-  map.appendChild(makeCard(false, status.peer_hostname ?? 'Aguardando...', !isActive && status.connected, status.connected));
+  map.appendChild(makeCard(false, status.peer_hostname ?? 'Outro ecrã', !isActive && status.connected, remoteLine));
 }
 
 function updateDevices(status: StatusPayload, settings: SettingsPayload | null) {

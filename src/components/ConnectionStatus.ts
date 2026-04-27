@@ -8,6 +8,8 @@ import { addLog } from './Logs';
 
 export interface StatusPayload {
   connected: boolean;
+  /** Servidor à escuta, a ligar, ligado ou a reconectar — UI mostra «Desconectar». */
+  in_session: boolean;
   status_text: string;
   peer_hostname?: string;
   peer_addr?: string;
@@ -21,6 +23,7 @@ export function normalizeStatusPayload(raw: unknown): StatusPayload {
   if (!raw || typeof raw !== "object") {
     return {
       connected: false,
+      in_session: false,
       status_text: "",
       active_screen: "Local",
       uptime_secs: 0,
@@ -29,9 +32,17 @@ export function normalizeStatusPayload(raw: unknown): StatusPayload {
   const r = raw as Record<string, unknown>;
   const num = (v: unknown): number | undefined =>
     typeof v === "number" && !Number.isNaN(v) ? v : undefined;
+  const statusText = String(r.status_text ?? r.statusText ?? "");
+  const connected = Boolean(r.connected);
+  const explicitSession = r.in_session ?? r.inSession;
+  const in_session =
+    typeof explicitSession === "boolean"
+      ? explicitSession
+      : connected || /aguardando|conectando|reconectando/i.test(statusText);
   return {
-    connected: Boolean(r.connected),
-    status_text: String(r.status_text ?? r.statusText ?? ""),
+    connected,
+    in_session,
+    status_text: statusText,
     peer_hostname: (r.peer_hostname ?? r.peerHostname) as string | undefined,
     peer_addr: (r.peer_addr ?? r.peerAddr) as string | undefined,
     latency_ms: num(r.latency_ms ?? r.latencyMs),
@@ -69,7 +80,7 @@ export async function initStatusListener(): Promise<() => void> {
     } catch {
       /* fora do Tauri */
     }
-  }, 2000);
+  }, 900);
 
   // Evento em tempo real quando o Rust emite (complementa o polling)
   await onEvent<unknown>("movex://status-changed", (raw) => {

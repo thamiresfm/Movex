@@ -18,6 +18,8 @@ use crate::core::state::{AppState, ConnectionStatus, SharedState};
 #[derive(serde::Serialize, Clone)]
 pub struct StatusPayload {
     pub connected: bool,
+    /// `true` quando há sessão ativa: à escuta, a ligar, ligado ou a reconectar (não parado).
+    pub in_session: bool,
     pub status_text: String,
     pub peer_hostname: Option<String>,
     /// Endereço do peer quando conectado (ex.: `192.168.1.10:24800`).
@@ -82,9 +84,18 @@ async fn build_status_payload(state: &SharedState) -> StatusPayload {
         .map(|t| t.elapsed().as_secs())
         .unwrap_or(0);
 
+    let in_session = !matches!(&status, ConnectionStatus::Disconnected);
+    // Texto vazio em `Disconnected` evita que a UI trate a palavra "Desconectado" como estado
+    // e use `connected` + fallback; em combinação com `in_session` os botões refletem Listening/Connecting.
+    let status_text = match &status {
+        ConnectionStatus::Disconnected => String::new(),
+        _ => status.to_string(),
+    };
+
     StatusPayload {
         connected,
-        status_text: status.to_string(),
+        in_session,
+        status_text,
         peer_hostname,
         peer_addr,
         latency_ms,
@@ -281,7 +292,12 @@ async fn disconnect(state: State<'_, SharedState>) -> Result<(), String> {
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Disconnected;
     }
+    {
+        let mut t = state.session_started_at.lock().await;
+        *t = None;
+    }
     tracing::info!("Desconectado pelo usuário");
+    crate::emit_status_to_main(&state).await;
     Ok(())
 }
 
