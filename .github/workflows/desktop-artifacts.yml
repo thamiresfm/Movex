@@ -108,18 +108,30 @@ jobs:
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
       - name: Tauri build (universal)
-        run: npm exec -- tauri build --target universal-apple-darwin
+        run: |
+          set -e
+          npm exec -- tauri build --target universal-apple-darwin
+          echo "=== Build concluído — bundle dir ==="
+          ls src-tauri/target/universal-apple-darwin/release/bundle/ 2>/dev/null \
+            || echo "AVISO: bundle dir não encontrado"
 
       - name: Listar e copiar DMG para pasta fixa
         run: |
+          set -e
           mkdir -p _artifacts_dmg
-          # Procurar em todos os targets (universal-apple-darwin ou release)
-          find src-tauri/target -name "*.dmg" -type f | while IFS= read -r f; do
-            echo "Encontrado: $f"
+          echo "=== Procurar DMG na árvore ==="
+          found=0
+          while IFS= read -r f; do
+            echo "Copiando: $f"
             cp "$f" _artifacts_dmg/
-          done
-          echo "--- conteúdo _artifacts_dmg ---"
-          ls -lh _artifacts_dmg/ || echo "(vazio)"
+            found=$((found + 1))
+          done < <(find . -name "*.dmg" -type f 2>/dev/null)
+          echo "--- Ficheiros copiados: $found ---"
+          ls -lh _artifacts_dmg/
+          if [ "$found" -eq 0 ]; then
+            echo "ERRO: Nenhum DMG encontrado após tauri build!"
+            exit 1
+          fi
 
       - name: Publicar .dmg
         uses: actions/upload-artifact@v4
@@ -166,18 +178,34 @@ jobs:
 
       - name: Tauri build (x64)
         shell: bash
-        run: npm exec -- tauri build
+        run: |
+          set -e
+          npm exec -- tauri build
+          echo "=== Build concluído — bundle dir ==="
+          ls src-tauri/target/release/bundle/ 2>/dev/null \
+            || ls src-tauri/target/x86_64-pc-windows-msvc/release/bundle/ 2>/dev/null \
+            || echo "AVISO: bundle dir não encontrado (tauri pode ter falhado)"
 
       - name: Listar e copiar .exe/.msi para pasta fixa
         shell: bash
         run: |
+          set -e
           mkdir -p _artifacts_win
-          find src-tauri/target -name "*.exe" -o -name "*.msi" | while IFS= read -r f; do
-            echo "Encontrado: $f"
+          echo "=== Conteúdo de src-tauri/ ==="
+          ls -la src-tauri/ 2>/dev/null || echo "(src-tauri/ inacessível)"
+          echo "=== Procurar instaladores na árvore ==="
+          found=0
+          while IFS= read -r f; do
+            echo "Copiando: $f"
             cp "$f" _artifacts_win/
-          done
-          echo "--- conteúdo _artifacts_win ---"
-          ls -lh _artifacts_win/ || echo "(vazio)"
+            found=$((found + 1))
+          done < <(find . \( -path "*/bundle/nsis/*.exe" -o -path "*/bundle/msi/*.msi" \) -type f 2>/dev/null)
+          echo "--- Ficheiros copiados: $found ---"
+          ls -lh _artifacts_win/
+          if [ "$found" -eq 0 ]; then
+            echo "ERRO: Nenhum instalador encontrado após tauri build!"
+            exit 1
+          fi
 
       - name: Publicar .exe e .msi
         uses: actions/upload-artifact@v4
