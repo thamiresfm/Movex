@@ -83,6 +83,23 @@ mod tests {
     }
 
     #[test]
+    fn encode_decode_enter_leave_screen() {
+        let enter = Message::EnterScreen;
+        let bytes_enter = enter.encode().unwrap();
+        match Message::decode(&bytes_enter[8..]).unwrap() {
+            Message::EnterScreen => {}
+            other => panic!("Expected EnterScreen, got {:?}", other),
+        }
+
+        let leave = Message::LeaveScreen;
+        let bytes_leave = leave.encode().unwrap();
+        match Message::decode(&bytes_leave[8..]).unwrap() {
+            Message::LeaveScreen => {}
+            other => panic!("Expected LeaveScreen, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn encode_decode_input_key_event() {
         use crate::input::events::{InputEvent, Modifiers};
         let event = InputEvent::KeyEvent {

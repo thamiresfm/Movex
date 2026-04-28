@@ -1,14 +1,19 @@
 use rustls::pki_types::ServerName;
+use std::sync::atomic::Ordering;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
+use crate::core::stats::get_primary_screen_size;
+use crate::input::events::InputEvent;
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
 use crate::network::transport::{create_tls_connector, recv_message, send_message};
+use crate::screen::boundary::{check_boundary, BoundaryResult};
+use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
 
 /// Quem está em papel **Cliente** não abre a porta TCP: não adianta apontar o IP do Cliente a partir do Servidor.
 const HINT_TOPOLOGY: &str = "Quem está só como Cliente não aceita conexões nesta porta — ligue a partir do Cliente para o IP do computador em Servidor (ou ative Servidor e Conectar no outro PC).";
@@ -440,6 +445,47 @@ async fn run_session<S>(
         Err(e) => { warn!("FileReceiver indisponível: {}", e); None }
     };
 
+    let peer_from_settings = {
+        let s = state.settings.lock().await;
+        match s.peer_position {
+            crate::config::ScreenPosition::Left  => PeerPosition::Left,
+            crate::config::ScreenPosition::Above => PeerPosition::Above,
+            crate::config::ScreenPosition::Below => PeerPosition::Below,
+            _                                    => PeerPosition::Right,
+        }
+    };
+
+    let monitors = crate::screen::layout::detect_monitors();
+    let primary = monitors
+        .monitors
+        .iter()
+        .find(|m| m.is_primary)
+        .or_else(|| monitors.monitors.first());
+    let (screen_w, screen_h, scale) = primary
+        .map(|m| (m.width, m.height, m.scale_factor))
+        .unwrap_or_else(|| {
+            let (w, h) = get_primary_screen_size();
+            (w, h, 1.0)
+        });
+
+    let client_return_layout = ScreenLayout {
+        local: ScreenResolution {
+            width: screen_w,
+            height: screen_h,
+            scale_factor: scale,
+        },
+        peer: None,
+        peer_position: peer_from_settings.invert(),
+    };
+    tracing::debug!(
+        "Cliente: borda de retorno {:?} (monitor {}x{})",
+        client_return_layout.peer_position,
+        screen_w,
+        screen_h,
+    );
+
+    let mut prev_in_return_strip = false;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -488,17 +534,48 @@ async fn run_session<S>(
             result = recv_message(stream) => {
                 match result {
             Ok(Message::EnterScreen) => {
-                        state.active_screen_remote.store(true, std::sync::atomic::Ordering::Release);
+                        prev_in_return_strip = false;
+                        state.active_screen_remote.store(true, Ordering::Release);
                 let mut active = state.active_screen.lock().await;
                 *active = ActiveScreen::Remote;
                         info!("Cursor entrou nesta máquina");
             }
             Ok(Message::LeaveScreen) => {
-                        state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
+                        state.active_screen_remote.store(false, Ordering::Release);
                 let mut active = state.active_screen.lock().await;
                 *active = ActiveScreen::Local;
             }
                     Ok(Message::Input(event)) => {
+                        if !state.active_screen_remote.load(Ordering::Acquire) {
+                            prev_in_return_strip = false;
+                        } else if let InputEvent::MouseMove { x, y } = &event {
+                            let px = x * client_return_layout.local.width as f32;
+                            let py = y * client_return_layout.local.height as f32;
+                            let in_strip = matches!(
+                                check_boundary(px, py, &client_return_layout),
+                                BoundaryResult::CrossedToPeer { .. }
+                            );
+                            let edge_enter = in_strip && !prev_in_return_strip;
+                            prev_in_return_strip = in_strip;
+                            if edge_enter {
+                                info!(
+                                    "Borda de retorno ao servidor (layout {:?}) — enviando LeaveScreen",
+                                    peer_from_settings
+                                );
+                                let mtx = state.message_tx.lock().await;
+                                if let Some(tx) = mtx.as_ref() {
+                                    let _ = tx.try_send(Message::LeaveScreen);
+                                }
+                                drop(mtx);
+                                state.active_screen_remote.store(false, Ordering::Release);
+                                let mut active = state.active_screen.lock().await;
+                                *active = ActiveScreen::Local;
+                                drop(active);
+                                crate::emit_status_to_main(&state).await;
+                            }
+                        } else {
+                            prev_in_return_strip = false;
+                        }
                         inject_event(event);
                     }
                     Ok(ref msg @ Message::ClipboardData { .. }) => {

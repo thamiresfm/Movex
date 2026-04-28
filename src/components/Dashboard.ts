@@ -8,6 +8,7 @@ import {
   onStatusChange,
   cleanupStatusHandlers,
   normalizeStatusPayload,
+  type StatusPayload,
 } from "./ConnectionStatus";
 import { cleanupAllListeners } from "../utils/tauri-events";
 
@@ -30,16 +31,61 @@ function formatLocalNetworkLine(port: number, ipv4Csv: string): string {
   return `Porta ${port} · esta máquina (IPv4 não detectado)`;
 }
 
-interface StatusPayload {
-  connected: boolean;
-  in_session: boolean;
-  status_text: string;
-  peer_hostname?: string;
-  /** Endereço do peer quando conectado (ex.: 192.168.1.5:24800). */
-  peer_addr?: string;
-  latency_ms?: number;
-  active_screen: string;
-  uptime_secs: number;
+/** Sessão ativa no backend ou inferida do texto (fallback se o campo in_session falhar no IPC). */
+function sessionLooksActive(status: StatusPayload): boolean {
+  if (status.connected) return true;
+  if (status.in_session) return true;
+  const t = (status.status_text ?? '').toLowerCase();
+  return /aguardando|conectando|reconectando/.test(t);
+}
+
+function applyPanelConnectionButtons(status: StatusPayload): void {
+  const on = sessionLooksActive(status);
+  const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement | null;
+  const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement | null;
+  if (btnConnect && btnDisconnect) {
+    btnConnect.style.display = on ? 'none' : 'inline-flex';
+    btnDisconnect.style.display = on ? 'inline-flex' : 'none';
+  }
+}
+
+function updateMatrixHint(
+  settings: { role?: string } | null,
+  status: StatusPayload,
+): void {
+  const hintMatriz = document.getElementById('matrixConnHint');
+  if (!hintMatriz) return;
+
+  if (status.connected) {
+    hintMatriz.style.display = 'block';
+    const role = (settings?.role ?? 'server').toLowerCase();
+    if (role === 'server') {
+      hintMatriz.textContent =
+        'Com o mesmo mapa nos dois PCs: no Servidor empurre o rato até à borda do ecrã em direção ao outro PC (como nas setas). No macOS, autorize Movex em Acessibilidade (Privacidade).';
+    } else {
+      hintMatriz.textContent =
+        'Para voltar ao ecrã do Servidor com o rato, empurre o cursor até à borda contra o outro PC (espelho da Matriz neste Cliente).';
+    }
+    return;
+  }
+
+  const role = (settings?.role ?? 'server').toLowerCase();
+  const tLower = (status.status_text ?? '').toLowerCase();
+  const servidorEscuta = role === 'server' && /aguardando/.test(tLower);
+  const clienteLiga = role === 'client' && /conectando|aguardando/.test(tLower);
+
+  if (servidorEscuta) {
+    hintMatriz.style.display = 'block';
+    hintMatriz.textContent =
+      'Este PC está como Servidor à escuta. No outro computador: papel Cliente, IP deste PC (painel «Rede») e «Conectar». Para parar, use «Desconectar».';
+  } else if (clienteLiga) {
+    hintMatriz.style.display = 'block';
+    hintMatriz.textContent =
+      'A ligar ao servidor… Se falhar, confira IP, porta, firewall e a mesma chave (PSK) nos dois PCs.';
+  } else {
+    hintMatriz.style.display = 'none';
+    hintMatriz.textContent = '';
+  }
 }
 
 interface PeerInfo {
@@ -174,6 +220,7 @@ export async function renderDashboard(): Promise<void> {
                   <div class="section-title">Matriz de Telas</div>
                   <div class="section-sub">Clique nas setas para definir a posição do outro monitor</div>
                   <div id="panelConnStatus" style="font-size:12px;font-weight:600;color:var(--text-2);margin-top:8px;min-height:18px;">Desconectado</div>
+                  <div id="matrixConnHint" style="font-size:11px;color:var(--text-3);margin-top:6px;max-width:440px;line-height:1.45;display:none;"></div>
                 </div>
                 <div style="display:flex;gap:10px;">
                   <button type="button" class="btn btn-outline" id="btnSendFile">📁 Enviar Arquivo</button>
@@ -601,8 +648,8 @@ export async function renderDashboard(): Promise<void> {
         const t = (status.status_text ?? '').trim();
         line.textContent = t || (status.connected ? 'Conectado' : 'Desconectado');
         const waiting = /aguardando|conectando|reconect/i.test(t);
-        const link = status.in_session || status.connected;
-        line.style.color = link || waiting ? 'var(--cyan)' : 'var(--text-2)';
+        const active = sessionLooksActive(status);
+        line.style.color = active || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
     }
     try {
@@ -634,7 +681,7 @@ export async function renderDashboard(): Promise<void> {
       }
 
       const nodesSummary = document.getElementById('nodesLabel');
-      if (nodesSummary && !status.connected && !status.in_session) {
+      if (nodesSummary && !status.connected && !sessionLooksActive(status)) {
         const parts = movexLocalIpv4Cache.split(' · ').filter(Boolean);
         nodesSummary.textContent =
           parts.length > 0
@@ -666,18 +713,12 @@ export async function renderDashboard(): Promise<void> {
         const uptimeStr = hrs > 0 ? `${hrs}h ${mins}m` : secs > 0 ? `${mins}m ${secs % 60}s` : '--';
         uptimeEl.innerHTML = `<span style="font-size:${hrs > 0 ? '28' : '22'}px">${uptimeStr}</span><span style="font-size:12px;color:var(--text-2);margin-left:4px;">uptime</span>`;
       }
-      // Botões conectar/desconectar
-      const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement;
-      const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement;
-      if (btnConnect && btnDisconnect) {
-        const on = status.in_session;
-        btnConnect.style.display = on ? 'none' : 'inline-flex';
-        btnDisconnect.style.display = on ? 'inline-flex' : 'none';
-      }
+      applyPanelConnectionButtons(status);
+      updateMatrixHint(settings ?? null, status);
       updateDevices(status, settings ?? null);
-      // Mostrar seletor de posição quando conectado
+      // Mostrar seletor de posição quando em sessão (à escuta ou conectado ao par)
       const posSelector = document.getElementById('peerPositionSelector');
-      if (posSelector) posSelector.style.display = status.in_session ? 'block' : 'none';
+      if (posSelector) posSelector.style.display = sessionLooksActive(status) ? 'block' : 'none';
       // Borda luminosa — cliente ativo
       {
         const role = settings?.role ?? 'server';
@@ -1132,7 +1173,7 @@ export async function renderDashboard(): Promise<void> {
     }
     // O servidor arranca numa task; vários `get_status` até refletir Listening/Connecting.
     let st = normalizeStatusPayload(await invoke<unknown>('get_status'));
-    for (let i = 0; i < 20 && !st.in_session && !st.connected; i++) {
+    for (let i = 0; i < 40 && !sessionLooksActive(st); i++) {
       await new Promise((r) => setTimeout(r, 100));
       st = normalizeStatusPayload(await invoke<unknown>('get_status'));
     }
@@ -1140,10 +1181,12 @@ export async function renderDashboard(): Promise<void> {
       const el = document.getElementById('panelConnStatus');
       if (el) {
         const t = (st.status_text ?? '').trim();
-        el.textContent = t || (st.in_session ? 'A aguardar…' : 'Desconectado');
+        el.textContent = t || (sessionLooksActive(st) ? 'A aguardar…' : 'Desconectado');
         const waiting = /aguardando|conectando|reconect/i.test(t);
-        el.style.color = st.connected || st.in_session || waiting ? 'var(--cyan)' : 'var(--text-2)';
+        el.style.color = sessionLooksActive(st) || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
+      applyPanelConnectionButtons(st);
+      updateMatrixHint(cachedSettings ?? null, st);
     }
     navTo('painel');
   };

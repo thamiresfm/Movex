@@ -46,17 +46,19 @@ jobs:
             cmake nasm clang libdbus-1-dev
       - name: Clippy (warnings como erros)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings 2>&1
-      - name: Testes unitários
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
+      - name: Testes Rust (crate completo)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast 2>&1
 
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
 
-      - name: Build frontend (Vite)
+      - name: npm ci, testes Vitest e build Vite
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run test
           npm run build
 
       - name: Metadados do build (rastreio)
@@ -85,8 +87,8 @@ jobs:
 
           | Etapa | Conteúdo |
           |------|----------|
-          | **Rust** | `cargo clippy` (lib) e `cargo test` (lib) |
-          | **Web** | `npm run build` (Vite) |
+          | **Rust** | `cargo clippy` (lib) e `cargo test` (crate) |
+          | **Web** | `npm run test` (Vitest) e `npm run build` (Vite) |
           | **Artefato** | `movex-frontend-dist` = pasta `dist/` + `BUILD-INFO.txt` (versão, ref, SHA) |
 
           ## Instaladores .dmg / .exe / .msi

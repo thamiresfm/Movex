@@ -179,6 +179,18 @@ fn detect_monitors_windows() -> MultiMonitorLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PeerPosition { Left, #[default] Right, Above, Below }
 
+impl PeerPosition {
+    /// Espelha o eixo: se no servidor o outro monitor está à direita, no cliente a borda de retorno é a esquerda.
+    pub fn invert(self) -> Self {
+        match self {
+            Self::Right => Self::Left,
+            Self::Left => Self::Right,
+            Self::Above => Self::Below,
+            Self::Below => Self::Above,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScreenLayout {
     pub local: ScreenResolution,
@@ -249,5 +261,14 @@ mod tests {
     fn normalize_against_offset_primary_right_edge() {
         let (nx, _ny) = normalize_point_against_display_rect(1920, 0, 1920, 1080, 3839, 100);
         assert!(nx > 0.99, "nx={} devia aproximar 1.0 na borda direita", nx);
+    }
+
+    #[test]
+    fn peer_position_invert_es_involutivo() {
+        assert_eq!(PeerPosition::Right.invert(), PeerPosition::Left);
+        assert_eq!(PeerPosition::Left.invert(), PeerPosition::Right);
+        assert_eq!(PeerPosition::Above.invert(), PeerPosition::Below);
+        assert_eq!(PeerPosition::Below.invert(), PeerPosition::Above);
+        assert_eq!(PeerPosition::Right.invert().invert(), PeerPosition::Right);
     }
 }

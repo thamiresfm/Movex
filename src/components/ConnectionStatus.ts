@@ -35,10 +35,10 @@ export function normalizeStatusPayload(raw: unknown): StatusPayload {
   const statusText = String(r.status_text ?? r.statusText ?? "");
   const connected = Boolean(r.connected);
   const explicitSession = r.in_session ?? r.inSession;
+  const fromText =
+    connected || /aguardando|conectando|reconectando/i.test(statusText);
   const in_session =
-    typeof explicitSession === "boolean"
-      ? explicitSession
-      : connected || /aguardando|conectando|reconectando/i.test(statusText);
+    fromText || explicitSession === true;
   return {
     connected,
     in_session,
