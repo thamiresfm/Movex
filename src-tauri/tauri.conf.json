@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Movex",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "identifier": "com.movex.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -49,8 +49,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "KVM por software — controle múltiplos computadores com um teclado e mouse",
-    "longDescription": "Movex permite usar um único teclado e mouse para controlar múltiplos computadores pela rede local, com transferência de arquivos e sincronização de clipboard.",
+    "shortDescription": "KVM por software \u2014 controle m\u00faltiplos computadores com um teclado e mouse",
+    "longDescription": "Movex permite usar um \u00fanico teclado e mouse para controlar m\u00faltiplos computadores pela rede local, com transfer\u00eancia de arquivos e sincroniza\u00e7\u00e3o de clipboard.",
     "macOS": {
       "minimumSystemVersion": "12.0",
       "infoPlist": "Info.plist"
