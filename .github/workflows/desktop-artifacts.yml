@@ -65,8 +65,17 @@ jobs:
           cache: npm
       - name: npm ci, Vitest e build Vite
         run: |
+          echo "=== Diretório de trabalho ==="
+          pwd
+          echo "=== package.json (scripts) ==="
+          node -e "const p=require('./package.json'); console.log(JSON.stringify({version:p.version,scripts:p.scripts},null,2))"
+          echo "=== Instalar ==="
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          echo "=== vitest instalado? ==="
+          npm list vitest --depth=0 2>/dev/null || echo "AVISO: vitest não encontrado"
+          echo "=== Testes ==="
           npm run test
+          echo "=== Build ==="
           npm run build
 
   macos-dmg:
