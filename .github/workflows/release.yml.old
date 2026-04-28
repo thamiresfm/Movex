@@ -1,0 +1,180 @@
+# Gera GitHub Release + instaladores .dmg / .exe / .msi. Dispara SÓ com: git tag v* && git push origin v*
+# (Push em `main` não dispara este ficheiro — isso fica no workflow `ci.yml`.)
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Execução manual: útil para repetir após ajuste de segredos (usa o commit/tag atual do ref escolhido)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    name: Lint, testes Rust e build frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ubuntu24-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu24-cargo-
+      - name: Instalar dependências Linux
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev pkg-config \
+            cmake nasm clang libdbus-1-dev
+      - name: Clippy (warnings como erros)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings 2>&1
+      - name: Testes unitários
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib 2>&1
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build frontend (Vite)
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
+      - name: Artefato frontend (verificação)
+        uses: actions/upload-artifact@v4
+        with:
+          name: movex-frontend-dist-tag-build
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Criar GitHub Release
+    runs-on: ubuntu-24.04
+    needs: [test]
+    outputs:
+      release_id: ${{ steps.gh_release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Criar release no GitHub
+        id: gh_release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Movex ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Movex ${{ github.ref_name }}
+
+            Controle múltiplos computadores com um único teclado e mouse pela rede local.
+
+            ### Downloads
+
+            | Plataforma | Arquivo |
+            |---|---|
+            | macOS (Apple Silicon + Intel) | `Movex_*_universal.dmg` |
+            | Windows 10/11 x64 | `Movex_*_x64_en-US.msi` |
+            | Windows 10/11 x64 | `Movex_*_x64-setup.exe` |
+
+            ### Como usar
+            1. Instale o Movex nos dois computadores
+            2. No principal, **Servidor**
+            3. No outro, **Cliente** com o IP do servidor (TLS)
+            4. Mova o cursor para a borda da tela para passar o controle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build macOS (Universal)
+    runs-on: macos-latest
+    needs: [release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Instalar dependências npm
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Build e upload macOS
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.release.outputs.release_id }}
+          args: --target universal-apple-darwin
+
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    needs: [release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Instalar dependências npm
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Certificado Windows (opcional)
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "Sem WINDOWS_CERTIFICATE — a compilar sem assinatura de código."
+            exit 0
+          }
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $pfx = "$env:TEMP\movex-cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, $certBytes)
+          $pwd = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pwd
+          Write-Host "Certificado instalado."
+      - name: Build e upload Windows
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.release.outputs.release_id }}

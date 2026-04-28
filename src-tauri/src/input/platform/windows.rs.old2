@@ -37,7 +37,11 @@ fn primary_display_bounds() -> (i32, i32, u32, u32) {
 
 fn normalize_cursor_to_primary_01(x: i32, y: i32) -> (f32, f32) {
     let (left, top, w, h) = primary_display_bounds();
-    crate::screen::layout::normalize_point_against_display_rect(left, top, w, h, x, y)
+    let wf = w.max(1) as f32;
+    let hf = h.max(1) as f32;
+    let nx = ((x - left) as f32 / wf).clamp(0.0, 1.0);
+    let ny = ((y - top) as f32 / hf).clamp(0.0, 1.0);
+    (nx, ny)
 }
 
 fn call_hook_cb(event: InputEvent) {
@@ -205,9 +209,7 @@ impl InputCapture for WindowsCapture {
         set_hook_cb(None);
     }
 
-    fn lock_cursor(&self, _entry_x: f32, _entry_y: f32) {
-        // No Windows o WH_MOUSE_LL já encaminha as coordenadas não-clampadas ao callback,
-        // portanto não precisamos de posição virtual como no macOS.
+    fn lock_cursor(&self) {
         if let Ok((x, y)) = get_cursor_pos_win() {
             unsafe {
                 use windows::Win32::Foundation::RECT;

@@ -6,17 +6,21 @@ use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
 
 pub struct MacOsCapture {
-    locked:   Arc<Mutex<bool>>,
-    lock_pos: Arc<Mutex<(f64, f64)>>,
-    running:  Arc<AtomicBool>,
+    locked:      Arc<Mutex<bool>>,
+    lock_pos:    Arc<Mutex<(f64, f64)>>,
+    running:     Arc<AtomicBool>,
+    /// Posição virtual do cursor no ecrã remoto (0..1). Inicializada no lock_cursor
+    /// com as coordenadas de entrada do cliente e actualizada via deltas de hardware.
+    virtual_pos: Arc<Mutex<(f32, f32)>>,
 }
 
 impl MacOsCapture {
     pub fn new() -> Self {
         Self {
-            locked:   Arc::new(Mutex::new(false)),
-            lock_pos: Arc::new(Mutex::new((0.0, 0.0))),
-            running:  Arc::new(AtomicBool::new(false)),
+            locked:      Arc::new(Mutex::new(false)),
+            lock_pos:    Arc::new(Mutex::new((0.0, 0.0))),
+            running:     Arc::new(AtomicBool::new(false)),
+            virtual_pos: Arc::new(Mutex::new((0.0, 0.5))),
         }
     }
 }
@@ -27,9 +31,10 @@ impl InputCapture for MacOsCapture {
             return Ok(());
         }
 
-        let locked  = Arc::clone(&self.locked);
-        let lock_pos = Arc::clone(&self.lock_pos);
-        let running = Arc::clone(&self.running);
+        let locked      = Arc::clone(&self.locked);
+        let lock_pos    = Arc::clone(&self.lock_pos);
+        let running     = Arc::clone(&self.running);
+        let virtual_pos = Arc::clone(&self.virtual_pos);
 
         std::thread::spawn(move || {
             use core_graphics::event::{
@@ -37,9 +42,10 @@ impl InputCapture for MacOsCapture {
                 CGEventTapOptions, CGEventType,
             };
 
-            let callback = Arc::new(callback);
-            let locked_inner   = Arc::clone(&locked);
-            let lock_pos_inner = Arc::clone(&lock_pos);
+            let callback        = Arc::new(callback);
+            let locked_inner    = Arc::clone(&locked);
+            let lock_pos_inner  = Arc::clone(&lock_pos);
+            let virtual_pos_inner = Arc::clone(&virtual_pos);
 
             let tap_result = CGEventTap::new(
                 CGEventTapLocation::HID,
@@ -60,14 +66,60 @@ impl InputCapture for MacOsCapture {
                     let is_locked = locked_inner.lock()
                         .map(|g| *g)
                         .unwrap_or(false);
+
                     if is_locked {
                         match event_type {
-                            CGEventType::MouseMoved
-                            | CGEventType::LeftMouseDown
+                            // Movimento do rato: acumular delta de hardware na posição virtual
+                            // remota e reencaminhar ao callback DO SERVIDOR antes de suprimir
+                            // o evento local. Sem este forward, o cliente nunca recebe movimentos
+                            // após o EnterScreen.
+                            CGEventType::MouseMoved => {
+                                // kCGMouseEventDeltaX = 4, kCGMouseEventDeltaY = 5
+                                // Deltas em unidades de dispositivo (pontos no macOS).
+                                use core_graphics::event::EventField;
+                                let dx = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_X) as f32;
+                                let dy = event.get_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y) as f32;
+
+                                let (vx, vy) = {
+                                    use core_graphics::display::CGDisplay;
+                                    let d = CGDisplay::main();
+                                    let b = d.bounds();
+                                    let w = b.size.width.max(1.0) as f32;
+                                    let h = b.size.height.max(1.0) as f32;
+                                    let mut vp = virtual_pos_inner.lock()
+                                        .unwrap_or_else(|p| p.into_inner());
+                                    // Y no CGDisplay cresce para baixo neste contexto de delta.
+                                    vp.0 = (vp.0 + dx / w).clamp(0.0, 1.0);
+                                    vp.1 = (vp.1 + dy / h).clamp(0.0, 1.0);
+                                    *vp
+                                };
+                                callback(InputEvent::MouseMove { x: vx, y: vy });
+
+                                // Manter o cursor preso visualmente no ecrã local.
+                                let (lx, ly) = lock_pos_inner.lock()
+                                    .map(|g| *g)
+                                    .unwrap_or((0.0, 0.0));
+                                use core_graphics::geometry::CGPoint;
+                                let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
+                                    CGPoint { x: lx, y: ly }
+                                );
+                                return None;
+                            }
+                            // Botões do rato: reencaminhar ao callback antes de suprimir.
+                            CGEventType::LeftMouseDown
                             | CGEventType::LeftMouseUp
                             | CGEventType::RightMouseDown
                             | CGEventType::RightMouseUp => {
-                                // unwrap_or: posição segura se lock envenenado
+                                let btn_event = match event_type {
+                                    CGEventType::LeftMouseDown  => Some(InputEvent::MouseButton { button: MouseButton::Left,  pressed: true  }),
+                                    CGEventType::LeftMouseUp    => Some(InputEvent::MouseButton { button: MouseButton::Left,  pressed: false }),
+                                    CGEventType::RightMouseDown => Some(InputEvent::MouseButton { button: MouseButton::Right, pressed: true  }),
+                                    CGEventType::RightMouseUp   => Some(InputEvent::MouseButton { button: MouseButton::Right, pressed: false }),
+                                    _ => None,
+                                };
+                                if let Some(ev) = btn_event {
+                                    callback(ev);
+                                }
                                 let (lx, ly) = lock_pos_inner.lock()
                                     .map(|g| *g)
                                     .unwrap_or((0.0, 0.0));
@@ -180,12 +232,14 @@ impl InputCapture for MacOsCapture {
         info!("MacOsCapture: encerrada");
     }
 
-    fn lock_cursor(&self) {
+    fn lock_cursor(&self, entry_x: f32, entry_y: f32) {
         if let Ok(pos) = get_cursor_position() {
             *self.lock_pos.lock().unwrap() = pos;
         }
+        // Inicializar posição virtual com o ponto de entrada no ecrã remoto.
+        *self.virtual_pos.lock().unwrap() = (entry_x, entry_y);
         *self.locked.lock().unwrap() = true;
-        info!("MacOsCapture: cursor bloqueado");
+        info!("MacOsCapture: cursor bloqueado; virtual_entry=({:.3}, {:.3})", entry_x, entry_y);
     }
 
     fn unlock_cursor(&self) {

@@ -245,13 +245,23 @@ async fn handle_client<S>(
         // lock_mode impede transição de cursor — verificar antes de qualquer lógica
         let locked = state_for_capture.lock_mode.load(std::sync::atomic::Ordering::Relaxed);
 
-        if !locked {
+        // Leitura atómica do estado actual — usada tanto na detecção de borda como
+        // no encaminhamento. Ler uma única vez para consistência dentro do callback.
+        let already_remote = state_for_capture.active_screen_remote
+            .load(std::sync::atomic::Ordering::Acquire);
+
+        // Só detectar borda quando estamos em modo local (cursor no ecrã deste PC).
+        // Se já estivermos remotos, nunca re-disparar EnterScreen em loop — esse era
+        // o bug que impedia o encaminhamento de eventos ao cliente.
+        if !locked && !already_remote {
             if let crate::input::InputEvent::MouseMove { x, y } = &event {
                 let px = x * layout_clone.local.width as f32;
                 let py = y * layout_clone.local.height as f32;
                 match check_boundary(px, py, &layout_clone) {
                     BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
-                        capture_ref_for_boundary.lock_cursor();
+                        // Passar entry_x/entry_y ao lock para que o cursor virtual
+                        // no macOS comece na posição correcta do ecrã remoto.
+                        capture_ref_for_boundary.lock_cursor(entry_x, entry_y);
                         state_for_capture.active_screen_remote
                             .store(true, std::sync::atomic::Ordering::Release);
                         let _ = msg_tx_for_capture.try_send(Message::EnterScreen);
@@ -265,9 +275,11 @@ async fn handle_client<S>(
             }
         }
 
-        // AtomicBool permite leitura lock-free no hot-path do callback
-        let is_remote = !locked && state_for_capture.active_screen_remote
-            .load(std::sync::atomic::Ordering::Acquire);
+        // Encaminhar eventos ao cliente quando o cursor está no ecrã remoto.
+        // (já_remote lido acima; re-verificar após o bloco de borda para apanhar
+        //  o caso em que outra thread mudou o estado entretanto — improvável mas seguro)
+        let is_remote = !locked && (already_remote || state_for_capture.active_screen_remote
+            .load(std::sync::atomic::Ordering::Acquire));
 
         if is_remote {
             let _ = msg_tx_for_capture.try_send(Message::Input(event));

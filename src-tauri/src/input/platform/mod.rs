@@ -10,7 +10,10 @@ use crate::input::InputEvent;
 pub trait InputCapture: Send + Sync {
     fn start(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync + 'static>) -> Result<(), String>;
     fn stop(&self);
-    fn lock_cursor(&self);
+    /// Bloqueia o cursor visualmente no ecrã local e inicializa a posição virtual
+    /// remota em (`entry_x`, `entry_y`) — coordenadas normalizadas 0..1 no ecrã
+    /// do cliente onde o cursor deve aparecer ao entrar.
+    fn lock_cursor(&self, entry_x: f32, entry_y: f32);
     fn unlock_cursor(&self);
 }
 

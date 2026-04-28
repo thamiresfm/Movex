@@ -536,14 +536,21 @@ async fn run_session<S>(
             Ok(Message::EnterScreen) => {
                         prev_in_return_strip = false;
                         state.active_screen_remote.store(true, Ordering::Release);
-                let mut active = state.active_screen.lock().await;
-                *active = ActiveScreen::Remote;
-                        info!("Cursor entrou nesta máquina");
+                        {
+                            let mut active = state.active_screen.lock().await;
+                            *active = ActiveScreen::Remote;
+                        }
+                        info!("Cursor entrou nesta máquina (modo remoto activado)");
+                        crate::emit_status_to_main(&state).await;
             }
             Ok(Message::LeaveScreen) => {
                         state.active_screen_remote.store(false, Ordering::Release);
-                let mut active = state.active_screen.lock().await;
-                *active = ActiveScreen::Local;
+                        {
+                            let mut active = state.active_screen.lock().await;
+                            *active = ActiveScreen::Local;
+                        }
+                        info!("Cursor voltou a esta máquina (modo local)");
+                        crate::emit_status_to_main(&state).await;
             }
                     Ok(Message::Input(event)) => {
                         if !state.active_screen_remote.load(Ordering::Acquire) {

@@ -1,0 +1,78 @@
+[package]
+name = "movex"
+version = "0.3.8"
+edition = "2021"
+description = "KVM por software — controle múltiplos computadores com um teclado e mouse"
+authors = ["Thamires Fernandes Mendes"]
+license = "MIT"
+repository = "https://github.com/thamiresfm/Movex"
+
+[package.metadata.bundle]
+icon = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+
+[lib]
+name = "movex_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "movex"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri                     = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell            = "2"
+tauri-plugin-notification     = "2"
+tauri-plugin-fs               = "2"
+tauri-plugin-dialog           = "2"
+tauri-plugin-global-shortcut  = "2"
+tauri-plugin-updater          = "2"
+
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode    = "2.0.0-rc.3"
+
+tokio        = { version = "1", features = ["full"] }
+tokio-util   = { version = "0.7", features = ["rt"] }
+tokio-rustls = "0.26"
+rustls       = { version = "0.23", features = ["ring"] }
+rcgen        = "0.13"
+
+mdns-sd  = "0.11"
+arboard  = "3"
+image    = { version = "0.25", default-features = false, features = ["png"] }
+flate2   = "1"
+sha2     = "0.10"
+hmac     = "0.12"
+rand     = "0.8"
+hex      = "0.4"
+dirs     = "5"
+thiserror = "1"
+hostname  = "0.3"
+if-addrs  = "0.13"
+
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender   = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+core-graphics   = "0.23"
+objc            = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"
+windows = { version = "0.54", features = [
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+] }
+

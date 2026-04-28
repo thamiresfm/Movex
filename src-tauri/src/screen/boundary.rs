@@ -1,6 +1,9 @@
 use crate::screen::layout::{PeerPosition, ScreenLayout};
 
-const EDGE_THRESHOLD: f32 = 2.0;
+/// Margem em píxeis a partir da borda do ecrã que acciona a transição para o peer.
+/// 8 px é suficientemente pequeno para não disparar acidentalmente mas grande o
+/// bastante para ser atingido com facilidade em qualquer resolução.
+const EDGE_THRESHOLD: f32 = 8.0;
 
 #[derive(Debug, PartialEq)]
 pub enum BoundaryResult {
