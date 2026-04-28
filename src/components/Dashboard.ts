@@ -655,7 +655,7 @@ export async function renderDashboard(): Promise<void> {
         // Mostrar texto claro: quando conectado nunca mostrar "conectando"
         if (status.connected) {
           // Extrair só o hostname do peer (evitar texto longo com IP e latência)
-          const peer = status.peer_hostname ?? t.replace(/^Conectado a\s*/i, '').split('@')[0].trim() || 'Par';
+            const peer = (status.peer_hostname ?? t.replace(/^Conectado a\s*/i, '').split('@')[0].trim()) || 'Par';
           line.textContent = `● Conectado a ${peer}`;
           line.style.color = 'var(--cyan)';
         } else if (!t) {
