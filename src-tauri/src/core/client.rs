@@ -534,7 +534,12 @@ async fn run_session<S>(
             result = recv_message(stream) => {
                 match result {
             Ok(Message::EnterScreen) => {
-                        prev_in_return_strip = false;
+                        // Inicializar como `true` para suprimir o LeaveScreen imediato:
+                        // o cursor chega na borda de entrada (ex: x=0 para Right), que já
+                        // é a strip de retorno. Se deixarmos `false`, o primeiro MouseMove
+                        // dispara edge_enter=true e devolve o cursor ao servidor antes de
+                        // o utilizador ver qualquer coisa no PC remoto.
+                        prev_in_return_strip = true;
                         state.active_screen_remote.store(true, Ordering::Release);
                         {
                             let mut active = state.active_screen.lock().await;

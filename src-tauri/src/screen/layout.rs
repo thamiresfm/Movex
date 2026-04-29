@@ -106,6 +106,11 @@ fn detect_monitors_macos() -> MultiMonitorLayout {
     let mut monitors: Vec<Monitor> = displays.iter().map(|&id| {
         let display = CGDisplay::new(id);
         let bounds = display.bounds();
+        // Usar PONTOS lógicos (bounds.size) e não pixels físicos (pixels_wide).
+        // O sistema de coordenadas Quartz (eventos de rato, warp, normalize) opera
+        // em pontos — em Retina 2×, pixels_wide = 2 × bounds.size.width. Misturar
+        // estas unidades causava un factor de escala 2× errado no check_boundary
+        // (entry_y calculado contra h=2160 mas normalizado contra h=1080 pontos).
         let scale = if bounds.size.width > 0.0 {
             display.pixels_wide() as f32 / bounds.size.width as f32
         } else { 1.0 };
@@ -113,8 +118,8 @@ fn detect_monitors_macos() -> MultiMonitorLayout {
             id,
             x: bounds.origin.x as i32,
             y: bounds.origin.y as i32,
-            width: display.pixels_wide() as u32,
-            height: display.pixels_high() as u32,
+            width:  bounds.size.width  as u32,   // pontos lógicos (coerente com Quartz)
+            height: bounds.size.height as u32,   // pontos lógicos
             scale_factor: scale,
             is_primary: id == main_id,
         }
