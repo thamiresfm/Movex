@@ -1,3 +1,22 @@
+/// Captura e injecção de eventos de rato/teclado no macOS.
+///
+/// # Padrão Barrier/Input-Leap (implementação comprovada)
+///
+/// O Barrier resolve o problema "cursor clipped at edge → delta=0" assim:
+/// 1. `lock_cursor`: warp para o CENTRO do ecrã (não para a borda).
+///    Actualizar `prev_pos = center` ANTES do warp para que o evento sintético
+///    gerado pelo CGWarpMouseCursorPosition tenha `delta = center - center = 0`.
+/// 2. Callback locked: `dx = event.location().x - prev_pos.x`,
+///    depois `prev_pos = center`, depois warp para centro.
+///    O próximo evento sintético tem `dx = 0` → skip automático.
+/// 3. Filtro "bogus zone": descartar deltas > 90% da semi-largura
+///    (artefacto residual de qualquer warp inesperado).
+///
+/// Esta abordagem garante que:
+/// - O cursor nunca fica clipado na borda → deltas sempre não-nulos
+/// - O evento sintético do warp tem sempre delta=0 → sem loop infinito
+/// - A velocidade do cursor inclui a aceleração do macOS (via location diff)
+
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{error, info};
@@ -6,21 +25,26 @@ use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
 
 pub struct MacOsCapture {
-    locked:      Arc<Mutex<bool>>,
-    lock_pos:    Arc<Mutex<(f64, f64)>>,
-    running:     Arc<AtomicBool>,
-    /// Posição virtual do cursor no ecrã remoto (0..1), convenção PADRÃO: (0,0) = topo-esq.
-    /// Inicializada com as coordenadas de entrada e actualizada via posição absoluta do cursor.
-    virtual_pos: Arc<Mutex<(f32, f32)>>,
+    locked:   Arc<Mutex<bool>>,
+    /// Centro do display principal — posição para onde o cursor é warped quando locked.
+    center:   Arc<Mutex<(f64, f64)>>,
+    /// Última posição conhecida do cursor (equivalente a m_xCursor/m_yCursor do Barrier).
+    /// Actualizado para `center` ANTES de cada warp para que o evento sintético do warp
+    /// tenha delta zero.
+    prev_pos: Arc<Mutex<(f64, f64)>>,
+    running:  Arc<AtomicBool>,
+    /// Posição virtual do cursor no ecrã remoto (0..1, convenção padrão 0=topo-esq).
+    virt_pos: Arc<Mutex<(f32, f32)>>,
 }
 
 impl MacOsCapture {
     pub fn new() -> Self {
         Self {
-            locked:      Arc::new(Mutex::new(false)),
-            lock_pos:    Arc::new(Mutex::new((0.0, 0.0))),
-            running:     Arc::new(AtomicBool::new(false)),
-            virtual_pos: Arc::new(Mutex::new((0.0, 0.5))),
+            locked:   Arc::new(Mutex::new(false)),
+            center:   Arc::new(Mutex::new((0.0, 0.0))),
+            prev_pos: Arc::new(Mutex::new((0.0, 0.0))),
+            running:  Arc::new(AtomicBool::new(false)),
+            virt_pos: Arc::new(Mutex::new((0.5, 0.5))),
         }
     }
 }
@@ -31,10 +55,11 @@ impl InputCapture for MacOsCapture {
             return Ok(());
         }
 
-        let locked      = Arc::clone(&self.locked);
-        let lock_pos    = Arc::clone(&self.lock_pos);
-        let running     = Arc::clone(&self.running);
-        let virtual_pos = Arc::clone(&self.virtual_pos);
+        let locked   = Arc::clone(&self.locked);
+        let center   = Arc::clone(&self.center);
+        let prev_pos = Arc::clone(&self.prev_pos);
+        let running  = Arc::clone(&self.running);
+        let virt_pos = Arc::clone(&self.virt_pos);
 
         std::thread::spawn(move || {
             use core_graphics::event::{
@@ -42,10 +67,11 @@ impl InputCapture for MacOsCapture {
                 CGEventTapOptions, CGEventType,
             };
 
-            let callback          = Arc::new(callback);
-            let locked_inner      = Arc::clone(&locked);
-            let lock_pos_inner    = Arc::clone(&lock_pos);
-            let virtual_pos_inner = Arc::clone(&virtual_pos);
+            let callback   = Arc::new(callback);
+            let locked_c   = Arc::clone(&locked);
+            let center_c   = Arc::clone(&center);
+            let prev_pos_c = Arc::clone(&prev_pos);
+            let virt_pos_c = Arc::clone(&virt_pos);
 
             let tap_result = CGEventTap::new(
                 CGEventTapLocation::HID,
@@ -55,63 +81,79 @@ impl InputCapture for MacOsCapture {
                     CGEventType::MouseMoved,
                     CGEventType::LeftMouseDown,
                     CGEventType::LeftMouseUp,
-                    CGEventType::LeftMouseDragged,   // necessário para arrastar no PC remoto
+                    CGEventType::LeftMouseDragged,   // arrastar no PC remoto
                     CGEventType::RightMouseDown,
                     CGEventType::RightMouseUp,
-                    CGEventType::RightMouseDragged,  // necessário para arrastar no PC remoto
+                    CGEventType::RightMouseDragged,  // arrastar no PC remoto
                     CGEventType::ScrollWheel,
                     CGEventType::KeyDown,
                     CGEventType::KeyUp,
                 ],
                 move |_proxy, event_type, event| {
-                    let is_locked = locked_inner.lock()
-                        .map(|g| *g)
-                        .unwrap_or(false);
+                    let is_locked = locked_c.lock().map(|g| *g).unwrap_or(false);
 
                     if is_locked {
                         match event_type {
-                            // ── Movimento do rato (e arrastar) quando cursor está preso ──────────
-                            // Usamos a posição ABSOLUTA do evento menos lock_pos para obter o delta.
-                            // Isto inclui a aceleração do macOS — ao contrário de MOUSE_EVENT_DELTA
-                            // que retorna valores RAW sem aceleração, o que tornava o cursor remoto
-                            // ~10× mais lento que o esperado.
-                            // Após ler a posição, fazemos warp de volta a lock_pos; o evento de
-                            // warp terá location == lock_pos, logo delta == 0 — sem feedback loop.
+                            // ── Movimento quando cursor está no PC remoto ──────────────────────
                             CGEventType::MouseMoved
                             | CGEventType::LeftMouseDragged
                             | CGEventType::RightMouseDragged => {
                                 let loc = event.location();
-                                let (lx, ly) = lock_pos_inner.lock()
-                                    .map(|g| *g)
-                                    .unwrap_or((0.0, 0.0));
 
-                                let dx = (loc.x - lx) as f32;
-                                // Quartz: Y cresce para baixo. Na convenção padrão (0=topo),
-                                // mover para baixo → dy > 0 → vy deve AUMENTAR.
-                                let dy = (loc.y - ly) as f32;
+                                // Ler prev_pos e centro antes de qualquer actualização
+                                let (prev_x, prev_y) = {
+                                    let pp = prev_pos_c.lock().unwrap_or_else(|p| p.into_inner());
+                                    *pp
+                                };
+                                let (cx, cy) = {
+                                    let cc = center_c.lock().unwrap_or_else(|p| p.into_inner());
+                                    *cc
+                                };
 
-                                let (vx, vy) = {
+                                let dx = (loc.x - prev_x) as f32;
+                                let dy = (loc.y - prev_y) as f32;
+
+                                // ── PADRÃO BARRIER ─────────────────────────────────────────────
+                                // Actualizar prev_pos para CENTRO antes do warp.
+                                // Quando o CGWarpMouseCursorPosition gerar o evento sintético,
+                                // ele chegará com loc == center e dx = center - center = 0.
+                                {
+                                    let mut pp = prev_pos_c.lock().unwrap_or_else(|p| p.into_inner());
+                                    *pp = (cx, cy);
+                                }
+                                let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
+                                    core_graphics::geometry::CGPoint { x: cx, y: cy }
+                                );
+
+                                // Descartar eventos com delta zero (evento sintético do warp)
+                                if dx.abs() < 0.5 && dy.abs() < 0.5 {
+                                    return None;
+                                }
+
+                                // Filtro bogus zone: descartar deltas impossíveis (> 90% da semi-largura)
+                                // como faz o Barrier para filtrar artefactos residuais do warp.
+                                let (w, h) = {
                                     use core_graphics::display::CGDisplay;
                                     let b = CGDisplay::main().bounds();
-                                    let w = b.size.width.max(1.0) as f32;
-                                    let h = b.size.height.max(1.0) as f32;
-                                    let mut vp = virtual_pos_inner.lock()
-                                        .unwrap_or_else(|p| p.into_inner());
+                                    (b.size.width as f32, b.size.height as f32)
+                                };
+                                if dx.abs() > w * 0.45 || dy.abs() > h * 0.45 {
+                                    return None;
+                                }
+
+                                // Acumular delta normalizado na posição virtual remota.
+                                // (incluindo aceleração do macOS — loc.diff tem aceleração ao contrário de MOUSE_EVENT_DELTA)
+                                let (vx, vy) = {
+                                    let mut vp = virt_pos_c.lock().unwrap_or_else(|p| p.into_inner());
                                     vp.0 = (vp.0 + dx / w).clamp(0.0, 1.0);
-                                    // += dy/h: dy>0 (baixo) → vy cresce → cursor move para baixo ✓
                                     vp.1 = (vp.1 + dy / h).clamp(0.0, 1.0);
                                     *vp
                                 };
                                 callback(InputEvent::MouseMove { x: vx, y: vy });
-
-                                // Manter o cursor preso visualmente em lock_pos.
-                                let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
-                                    core_graphics::geometry::CGPoint { x: lx, y: ly }
-                                );
                                 return None;
                             }
 
-                            // ── Botões: suprimir localmente e reencaminhar ao PC remoto ──────────
+                            // ── Botões: suprimir localmente, reencaminhar ao PC remoto ─────────
                             CGEventType::LeftMouseDown
                             | CGEventType::LeftMouseUp
                             | CGEventType::RightMouseDown
@@ -126,26 +168,17 @@ impl InputCapture for MacOsCapture {
                                 if let Some(ev) = btn_event {
                                     callback(ev);
                                 }
-                                // Manter o cursor preso visualmente.
-                                let (lx, ly) = lock_pos_inner.lock()
-                                    .map(|g| *g)
-                                    .unwrap_or((0.0, 0.0));
-                                let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
-                                    core_graphics::geometry::CGPoint { x: lx, y: ly }
-                                );
                                 return None;
                             }
                             _ => {}
                         }
                     }
 
-                    // ── Eventos locais (cursor NÃO está no PC remoto) ───────────────────────────
+                    // ── Eventos locais (cursor neste PC) ───────────────────────────────────────
                     let input = match event_type {
                         CGEventType::MouseMoved
                         | CGEventType::LeftMouseDragged
                         | CGEventType::RightMouseDragged => {
-                            // Convenção PADRÃO: (0,0) = topo-esq, (1,1) = base-dir.
-                            // `loc.y` Quartz: 0 = topo, cresce para baixo → ny = loc_y / h
                             let loc = event.location();
                             let (nx, ny) = normalize_mouse_standard(loc.x, loc.y);
                             Some(InputEvent::MouseMove { x: nx, y: ny })
@@ -176,10 +209,10 @@ impl InputCapture for MacOsCapture {
                                 EventField::KEYBOARD_EVENT_KEYCODE) as u32;
                             let flags = event.get_flags();
                             let mut mods = Modifiers::NONE;
-                            if flags.contains(CGEventFlags::CGEventFlagShift)    { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagControl)  { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagAlternate){ mods = Modifiers(mods.0 | Modifiers::ALT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagCommand)  { mods = Modifiers(mods.0 | Modifiers::META.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
                             let pressed = matches!(event_type, CGEventType::KeyDown);
                             Some(InputEvent::KeyEvent { keycode, pressed, modifiers: mods })
                         }
@@ -195,7 +228,7 @@ impl InputCapture for MacOsCapture {
 
             match tap_result {
                 Ok(tap) => {
-                    info!("MacOsCapture: CGEventTap criado");
+                    info!("MacOsCapture: CGEventTap criado (padrão Barrier)");
                     let loop_src = match tap.mach_port.create_runloop_source(0) {
                         Ok(s) => s,
                         Err(_) => {
@@ -221,7 +254,7 @@ impl InputCapture for MacOsCapture {
                     info!("MacOsCapture: loop encerrado");
                 }
                 Err(e) => {
-                    error!("CGEventTap falhou: {:?} — verifique permissão de Acessibilidade em Preferências do Sistema", e);
+                    error!("CGEventTap falhou: {:?} — verifique permissão de Acessibilidade", e);
                     running.store(false, Ordering::SeqCst);
                 }
             }
@@ -236,20 +269,42 @@ impl InputCapture for MacOsCapture {
         info!("MacOsCapture: encerrada");
     }
 
+    /// Travar o cursor — abordagem Barrier:
+    /// 1. Warp para o CENTRO do ecrã (o cursor nunca fica clipado na borda)
+    /// 2. Actualizar `prev_pos = center` ANTES do warp para que o evento sintético
+    ///    gerado pelo warp tenha `delta = center - center = 0` → é descartado automaticamente
     fn lock_cursor(&self, entry_x: f32, entry_y: f32) {
-        if let Ok(pos) = get_cursor_position() {
-            *self.lock_pos.lock().unwrap() = pos;
-        }
-        // Inicializar posição virtual com o ponto de entrada no ecrã remoto.
-        // entry_x, entry_y usam convenção PADRÃO (0=topo-esq, 1=base-dir).
-        *self.virtual_pos.lock().unwrap() = (entry_x, entry_y);
+        use core_graphics::display::CGDisplay;
+        let b = CGDisplay::main().bounds();
+        let cx = b.origin.x + b.size.width  / 2.0;
+        let cy = b.origin.y + b.size.height / 2.0;
+
+        // 1. Guardar centro
+        *self.center.lock().unwrap() = (cx, cy);
+
+        // 2. Actualizar prev_pos para centro ANTES do warp (padrão Barrier!)
+        *self.prev_pos.lock().unwrap() = (cx, cy);
+
+        // 3. Definir posição virtual de entrada no ecrã remoto
+        *self.virt_pos.lock().unwrap() = (entry_x, entry_y);
+
+        // 4. Activar lock
         *self.locked.lock().unwrap() = true;
-        info!("MacOsCapture: cursor bloqueado; virtual_entry=({:.3}, {:.3})", entry_x, entry_y);
+
+        // 5. Warp para centro — o evento sintético terá delta=0 e será descartado
+        let _ = CGDisplay::warp_mouse_cursor_position(
+            core_graphics::geometry::CGPoint { x: cx, y: cy }
+        );
+
+        info!(
+            "MacOsCapture: locked → warp para centro ({:.0},{:.0}); entry=({:.3},{:.3})",
+            cx, cy, entry_x, entry_y
+        );
     }
 
     fn unlock_cursor(&self) {
         *self.locked.lock().unwrap() = false;
-        info!("MacOsCapture: cursor liberado");
+        info!("MacOsCapture: unlocked");
     }
 }
 
@@ -272,16 +327,16 @@ impl InputInjector for MacOsInjector {
 
         match event {
             InputEvent::MouseMove { x, y } => {
-                // Convenção PADRÃO: x=0 esq, x=1 dir, y=0 topo, y=1 base.
+                // Convenção padrão: x=0 esq, x=1 dir, y=0 topo, y=1 base.
                 // Quartz: origin na top-left, Y cresce para baixo → mapeamento directo.
                 use core_graphics::display::CGDisplay;
-                let d = CGDisplay::main();
-                let b = d.bounds();
+                let b = CGDisplay::main().bounds();
                 let gx = b.origin.x + (x as f64) * b.size.width;
                 let gy = b.origin.y + (y as f64) * b.size.height;
-                let pt = CGPoint { x: gx, y: gy };
-                let ev = CGEvent::new_mouse_event(source, CGEventType::MouseMoved, pt, CGMouseButton::Left)
-                    .map_err(|_| "Falha MouseMove".to_string())?;
+                let ev = CGEvent::new_mouse_event(
+                    source, CGEventType::MouseMoved,
+                    CGPoint { x: gx, y: gy }, CGMouseButton::Left,
+                ).map_err(|_| "Falha MouseMove".to_string())?;
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
             }
             InputEvent::MouseButton { button, pressed } => {
@@ -292,7 +347,9 @@ impl InputInjector for MacOsInjector {
                     (MouseButton::Right, false) => (CGEventType::RightMouseUp,   CGMouseButton::Right),
                     _ => return Ok(()),
                 };
-                let pos = get_cursor_position().map(|(x,y)| CGPoint{x,y}).unwrap_or(CGPoint{x:0.0,y:0.0});
+                let pos = get_cursor_position()
+                    .map(|(x, y)| CGPoint { x, y })
+                    .unwrap_or(CGPoint { x: 0.0, y: 0.0 });
                 let ev = CGEvent::new_mouse_event(source, et, pos, cb)
                     .map_err(|_| "Falha MouseButton".to_string())?;
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
@@ -325,19 +382,14 @@ impl InputInjector for MacOsInjector {
 /// (0,0) = canto **superior esquerdo**, (1,1) = canto **inferior direito**.
 ///
 /// Quartz: Y=0 no topo do display principal, cresce para baixo → divisão directa (sem inversão).
-/// Esta convenção é consistente com Windows (`normalize_point_against_display_rect`) e com
-/// o sistema de coordenadas de `check_boundary` / `ScreenLayout`.
+/// Consistente com Windows (`normalize_point_against_display_rect`) e `check_boundary`.
 fn normalize_mouse_standard(loc_x: f64, loc_y: f64) -> (f32, f32) {
     use core_graphics::display::CGDisplay;
-    let d = CGDisplay::main();
-    let b = d.bounds();
-    let w_pt = b.size.width.max(1.0);
-    let h_pt = b.size.height.max(1.0);
-    let rel_x = loc_x - b.origin.x;
-    let rel_y = loc_y - b.origin.y;
-    // Y cresce para baixo em Quartz → ny = rel_y / h, sem inversão.
-    let nx = (rel_x / w_pt).clamp(0.0, 1.0) as f32;
-    let ny = (rel_y / h_pt).clamp(0.0, 1.0) as f32;
+    let b = CGDisplay::main().bounds();
+    let w = b.size.width.max(1.0);
+    let h = b.size.height.max(1.0);
+    let nx = ((loc_x - b.origin.x) / w).clamp(0.0, 1.0) as f32;
+    let ny = ((loc_y - b.origin.y) / h).clamp(0.0, 1.0) as f32;
     (nx, ny)
 }
 
