@@ -1,5 +1,21 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+/// Captura e injecção de eventos de rato/teclado no Windows.
+///
+/// # Padrão Barrier/Input-Leap — portado do macOS
+///
+/// O mesmo problema que afectava o macOS existe aqui:
+/// - `ClipCursor` na borda → o sistema recalcula cada movimento a partir da posição clampada
+///   → todos os eventos WM_MOUSEMOVE reportam a mesma posição → cursor remoto imóvel.
+///
+/// Solução (idêntica ao Barrier/OSXScreen e ao nosso `macos.rs`):
+/// 1. `lock_cursor`: chama `SetCursorPos(cx, cy)` para o CENTRO do ecrã.
+///    Actualizar `WIN_PREV_{X,Y} = (cx, cy)` ANTES do warp para que o evento
+///    sintético gerado pelo SetCursorPos tenha `delta = 0`.
+/// 2. `mouse_proc` locked: `dx = pt.x - prev_x`, depois `prev = center`, depois warp.
+///    O próximo evento sintético tem `dx = 0` → skip automático.
+/// 3. Filtro "bogus zone": descartar deltas > 45% da largura/altura.
+
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::OnceLock;
 use tracing::{error, info};
 
 use crate::input::events::{InputEvent, MouseButton, Modifiers};
@@ -7,19 +23,29 @@ use super::{InputCapture, InputInjector};
 
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync + 'static>;
 
-// RwLock permite leituras concorrentes no hot-path do hook (centenas de vezes/s)
-// e escritas exclusivas apenas durante init/shutdown.
-static HOOK_CB: OnceLock<std::sync::RwLock<Option<Arc<HookCallback>>>> = OnceLock::new();
+// ── Callback do hook ───────────────────────────────────────────────────────────
 
-fn get_hook_cell() -> &'static std::sync::RwLock<Option<Arc<HookCallback>>> {
+static HOOK_CB: OnceLock<std::sync::RwLock<Option<std::sync::Arc<HookCallback>>>> = OnceLock::new();
+
+fn get_hook_cell() -> &'static std::sync::RwLock<Option<std::sync::Arc<HookCallback>>> {
     HOOK_CB.get_or_init(|| std::sync::RwLock::new(None))
 }
 
-fn set_hook_cb(cb: Option<Arc<HookCallback>>) {
+fn set_hook_cb(cb: Option<std::sync::Arc<HookCallback>>) {
     if let Ok(mut w) = get_hook_cell().write() {
         *w = cb;
     }
 }
+
+fn call_hook_cb(event: InputEvent) {
+    if let Ok(r) = get_hook_cell().read() {
+        if let Some(cb) = r.as_ref() {
+            cb(event);
+        }
+    }
+}
+
+// ── Estado de captura do display primário ─────────────────────────────────────
 
 static PRIMARY_BOUNDS: OnceLock<(i32, i32, u32, u32)> = OnceLock::new();
 
@@ -40,21 +66,46 @@ fn normalize_cursor_to_primary_01(x: i32, y: i32) -> (f32, f32) {
     crate::screen::layout::normalize_point_against_display_rect(left, top, w, h, x, y)
 }
 
-fn call_hook_cb(event: InputEvent) {
-    if let Ok(r) = get_hook_cell().read() {
-        if let Some(cb) = r.as_ref() {
-            cb(event);
-        }
-    }
+// ── Estado Barrier (padrão idêntico ao macos.rs) ──────────────────────────────
+
+/// Indica se o cursor está bloqueado para controlo remoto (servidor em modo remoto).
+static WIN_CURSOR_LOCKED: AtomicBool = AtomicBool::new(false);
+
+/// Centro do display primário em pixels lógicos — destino do warp.
+static WIN_CENTER_X: AtomicI32 = AtomicI32::new(0);
+static WIN_CENTER_Y: AtomicI32 = AtomicI32::new(0);
+
+/// Última posição conhecida — actualizado para `center` ANTES de cada warp,
+/// de modo a que o evento sintético do SetCursorPos tenha delta = 0.
+static WIN_PREV_X: AtomicI32 = AtomicI32::new(0);
+static WIN_PREV_Y: AtomicI32 = AtomicI32::new(0);
+
+/// Posição virtual do cursor no ecrã remoto (bits de f32 guardados em AtomicU32).
+static WIN_VIRT_X_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static WIN_VIRT_Y_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[inline]
+fn virt_pos_load() -> (f32, f32) {
+    let x = f32::from_bits(WIN_VIRT_X_BITS.load(Ordering::Acquire));
+    let y = f32::from_bits(WIN_VIRT_Y_BITS.load(Ordering::Acquire));
+    (x, y)
 }
 
+#[inline]
+fn virt_pos_store(x: f32, y: f32) {
+    WIN_VIRT_X_BITS.store(x.to_bits(), Ordering::Release);
+    WIN_VIRT_Y_BITS.store(y.to_bits(), Ordering::Release);
+}
+
+// ── WindowsCapture ────────────────────────────────────────────────────────────
+
 pub struct WindowsCapture {
-    running: Arc<AtomicBool>,
+    running: std::sync::Arc<AtomicBool>,
 }
 
 impl WindowsCapture {
     pub fn new() -> Self {
-        Self { running: Arc::new(AtomicBool::new(false)) }
+        Self { running: std::sync::Arc::new(AtomicBool::new(false)) }
     }
 }
 
@@ -64,14 +115,13 @@ impl InputCapture for WindowsCapture {
             return Ok(());
         }
 
-        let running = Arc::clone(&self.running);
-        set_hook_cb(Some(Arc::new(callback)));
+        let running = std::sync::Arc::clone(&self.running);
+        set_hook_cb(Some(std::sync::Arc::new(callback)));
 
         std::thread::spawn(move || {
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowsHookExW, UnhookWindowsHookEx,
-                WH_MOUSE_LL, WH_KEYBOARD_LL, MSG,
-                HC_ACTION,
+                WH_MOUSE_LL, WH_KEYBOARD_LL, MSG, HC_ACTION,
             };
             use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -92,8 +142,72 @@ impl InputCapture for WindowsCapture {
 
                 if n_code == HC_ACTION as i32 {
                     let data = &*(l_param.0 as *const MSLLHOOKSTRUCT);
+                    let msg_type = w_param.0 as u32;
 
-                    let event = match w_param.0 as u32 {
+                    // ── Modo bloqueado (cursor no PC remoto) ───────────────────────────
+                    if WIN_CURSOR_LOCKED.load(Ordering::Acquire) {
+                        let event = match msg_type {
+                            v if v == WM_MOUSEMOVE => {
+                                // Ler prev_pos e centro
+                                let prev_x = WIN_PREV_X.load(Ordering::Acquire);
+                                let prev_y = WIN_PREV_Y.load(Ordering::Acquire);
+                                let cx = WIN_CENTER_X.load(Ordering::Acquire);
+                                let cy = WIN_CENTER_Y.load(Ordering::Acquire);
+
+                                let dx = (data.pt.x - prev_x) as f32;
+                                let dy = (data.pt.y - prev_y) as f32;
+
+                                // Actualizar prev_pos para centro ANTES do warp (padrão Barrier)
+                                WIN_PREV_X.store(cx, Ordering::Release);
+                                WIN_PREV_Y.store(cy, Ordering::Release);
+
+                                // Warp para centro
+                                use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+                                let _ = SetCursorPos(cx, cy);
+
+                                // Filtrar evento sintético do warp (delta ≈ 0)
+                                if dx.abs() < 0.5 && dy.abs() < 0.5 {
+                                    return CallNextHookEx(None, n_code, w_param, l_param);
+                                }
+
+                                // Filtro bogus zone: descartar deltas impossíveis
+                                let (_, _, w, h) = primary_display_bounds();
+                                if dx.abs() > w as f32 * 0.45 || dy.abs() > h as f32 * 0.45 {
+                                    return CallNextHookEx(None, n_code, w_param, l_param);
+                                }
+
+                                // Acumular delta normalizado na posição virtual remota
+                                let (vx, vy) = virt_pos_load();
+                                let (nw, nh) = (w as f32, h as f32);
+                                let new_vx = (vx + dx / nw).clamp(0.0, 1.0);
+                                let new_vy = (vy + dy / nh).clamp(0.0, 1.0);
+                                virt_pos_store(new_vx, new_vy);
+
+                                Some(InputEvent::MouseMove { x: new_vx, y: new_vy })
+                            }
+                            v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {
+                                button: MouseButton::Left, pressed: true,
+                            }),
+                            v if v == WM_LBUTTONUP => Some(InputEvent::MouseButton {
+                                button: MouseButton::Left, pressed: false,
+                            }),
+                            v if v == WM_RBUTTONDOWN => Some(InputEvent::MouseButton {
+                                button: MouseButton::Right, pressed: true,
+                            }),
+                            v if v == WM_RBUTTONUP => Some(InputEvent::MouseButton {
+                                button: MouseButton::Right, pressed: false,
+                            }),
+                            _ => None,
+                        };
+                        if let Some(ev) = event {
+                            call_hook_cb(ev);
+                        }
+                        // Suprimir evento local enquanto bloqueado (exceto scroll que não interfere)
+                        return CallNextHookEx(None, n_code, w_param, l_param);
+                    }
+
+                    // ── Modo local (cursor neste PC) ───────────────────────────────────
+                    let event = match msg_type {
                         v if v == WM_MOUSEMOVE => {
                             let (nx, ny) = normalize_cursor_to_primary_01(data.pt.x, data.pt.y);
                             Some(InputEvent::MouseMove { x: nx, y: ny })
@@ -176,7 +290,7 @@ impl InputCapture for WindowsCapture {
                     }
                 };
 
-                info!("WindowsCapture: hooks instalados");
+                info!("WindowsCapture: hooks instalados (padrão Barrier)");
 
                 let mut msg = MSG::default();
                 while running.load(Ordering::SeqCst) {
@@ -205,28 +319,48 @@ impl InputCapture for WindowsCapture {
         set_hook_cb(None);
     }
 
-    fn lock_cursor(&self, _entry_x: f32, _entry_y: f32) {
-        // No Windows o WH_MOUSE_LL já encaminha as coordenadas não-clampadas ao callback,
-        // portanto não precisamos de posição virtual como no macOS.
-        if let Ok((x, y)) = get_cursor_pos_win() {
-            unsafe {
-                use windows::Win32::Foundation::RECT;
-                use windows::Win32::UI::WindowsAndMessaging::ClipCursor;
-                let rect = RECT { left: x, top: y, right: x + 1, bottom: y + 1 };
-                ClipCursor(Some(&rect)).ok();
-            }
+    /// Travar o cursor — padrão Barrier (idêntico ao macOS):
+    /// 1. Warp para o CENTRO do ecrã (nunca fica clampado na borda).
+    /// 2. Actualizar `WIN_PREV_{X,Y} = center` ANTES do warp para que o evento
+    ///    sintético gerado pelo SetCursorPos tenha `delta = 0` → descartado.
+    fn lock_cursor(&self, entry_x: f32, entry_y: f32) {
+        let (left, top, w, h) = primary_display_bounds();
+        let cx = left + w as i32 / 2;
+        let cy = top  + h as i32 / 2;
+
+        WIN_CENTER_X.store(cx, Ordering::Release);
+        WIN_CENTER_Y.store(cy, Ordering::Release);
+
+        // Actualizar prev_pos para centro ANTES do warp (padrão Barrier!)
+        WIN_PREV_X.store(cx, Ordering::Release);
+        WIN_PREV_Y.store(cy, Ordering::Release);
+
+        // Definir posição virtual de entrada no ecrã remoto
+        virt_pos_store(entry_x, entry_y);
+
+        // Activar modo bloqueado
+        WIN_CURSOR_LOCKED.store(true, Ordering::Release);
+
+        // Warp para centro e remover restrição de ClipCursor (se existir)
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{SetCursorPos, ClipCursor};
+            ClipCursor(None).ok();
+            let _ = SetCursorPos(cx, cy);
         }
-        info!("WindowsCapture: cursor bloqueado");
+
+        info!(
+            "WindowsCapture: locked → warp para centro ({},{}) entry=({:.3},{:.3})",
+            cx, cy, entry_x, entry_y
+        );
     }
 
     fn unlock_cursor(&self) {
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::ClipCursor;
-            ClipCursor(None).ok();
-        }
-        info!("WindowsCapture: cursor liberado");
+        WIN_CURSOR_LOCKED.store(false, Ordering::Release);
+        info!("WindowsCapture: unlocked");
     }
 }
+
+// ── WindowsInjector ───────────────────────────────────────────────────────────
 
 pub struct WindowsInjector;
 
@@ -359,15 +493,5 @@ fn make_key_input(vk: u16, key_up: bool) -> windows::Win32::UI::Input::KeyboardA
                 dwExtraInfo: 0,
             },
         },
-    }
-}
-
-fn get_cursor_pos_win() -> Result<(i32, i32), ()> {
-    unsafe {
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-        let mut pt = POINT::default();
-        GetCursorPos(&mut pt).map_err(|_| ())?;
-        Ok((pt.x, pt.y))
     }
 }

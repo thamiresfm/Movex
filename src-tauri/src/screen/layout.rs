@@ -126,8 +126,19 @@ fn detect_monitors_macos() -> MultiMonitorLayout {
     }).collect();
 
     if monitors.is_empty() {
+        // Usar bounds (pontos lógicos) mesmo no fallback — consistente com Quartz.
         let d = CGDisplay::main();
-        monitors.push(Monitor { id: d.id, x: 0, y: 0, width: d.pixels_wide() as u32, height: d.pixels_high() as u32, scale_factor: 1.0, is_primary: true });
+        let b = d.bounds();
+        let scale = if b.size.width > 0.0 { d.pixels_wide() as f32 / b.size.width as f32 } else { 1.0 };
+        monitors.push(Monitor {
+            id: d.id,
+            x: b.origin.x as i32,
+            y: b.origin.y as i32,
+            width:  b.size.width  as u32,
+            height: b.size.height as u32,
+            scale_factor: scale,
+            is_primary: true,
+        });
     }
 
     MultiMonitorLayout { monitors }
