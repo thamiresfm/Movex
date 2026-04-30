@@ -5,7 +5,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
-use crate::core::stats::get_primary_screen_size;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::transport::{
     create_tls_acceptor, load_or_generate_server_cert, recv_message, send_message,
@@ -218,21 +217,32 @@ async fn handle_client<S>(
             _                                    => PeerPosition::Right,
         }
     };
+    // Borda KMS na área **virtual total** — não apenas no rect do primário.
     let monitors = crate::screen::layout::detect_monitors();
-    let primary = monitors.monitors.iter()
+    let (_, _, bbox_w, bbox_h) = monitors.bounding_box();
+    let primary = monitors
+        .monitors
+        .iter()
         .find(|m| m.is_primary)
         .or_else(|| monitors.monitors.first());
-    let (screen_w, screen_h, scale) = primary
-        .map(|m| (m.width, m.height, m.scale_factor))
-        .unwrap_or_else(|| { let (w, h) = get_primary_screen_size(); (w, h, 1.0) });
+    let scale = primary.map(|m| m.scale_factor).unwrap_or(1.0_f32);
 
     let layout = ScreenLayout {
-        local: ScreenResolution { width: screen_w, height: screen_h, scale_factor: scale },
+        local: ScreenResolution {
+            width: bbox_w,
+            height: bbox_h,
+            scale_factor: scale,
+        },
         peer: None,
         peer_position,
     };
 
-    tracing::info!("Monitor local: {}x{} scale={:.1}", screen_w, screen_h, scale);
+    tracing::info!(
+        "Área desktop virtual (bounding box KMS): {}x{} scale_primário={:.1}",
+        bbox_w,
+        bbox_h,
+        scale
+    );
 
     let state_for_capture = state.clone();
     let msg_tx_for_capture = msg_tx.clone();

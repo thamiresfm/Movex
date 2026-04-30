@@ -130,23 +130,21 @@ impl InputCapture for MacOsCapture {
                                     return None;
                                 }
 
-                                // Filtro bogus zone: descartar deltas impossíveis (> 90% da semi-largura)
-                                // como faz o Barrier para filtrar artefactos residuais do warp.
-                                let (w, h) = {
-                                    use core_graphics::display::CGDisplay;
-                                    let b = CGDisplay::main().bounds();
-                                    (b.size.width as f32, b.size.height as f32)
-                                };
-                                if dx.abs() > w * 0.45 || dy.abs() > h * 0.45 {
+                                let (_, _, bw, bh) =
+                                    crate::screen::layout::desktop_bounding_box_cached();
+                                let w = bw as f32;
+                                let h = bh as f32;
+                                let w_nonempty = w.max(1.0);
+                                let h_nonempty = h.max(1.0);
+                                if dx.abs() > w_nonempty * 0.45 || dy.abs() > h_nonempty * 0.45 {
                                     return None;
                                 }
 
                                 // Acumular delta normalizado na posição virtual remota.
-                                // (incluindo aceleração do macOS — loc.diff tem aceleração ao contrário de MOUSE_EVENT_DELTA)
                                 let (vx, vy) = {
                                     let mut vp = virt_pos_c.lock().unwrap_or_else(|p| p.into_inner());
-                                    vp.0 = (vp.0 + dx / w).clamp(0.0, 1.0);
-                                    vp.1 = (vp.1 + dy / h).clamp(0.0, 1.0);
+                                    vp.0 = (vp.0 + dx / w_nonempty).clamp(0.0, 1.0);
+                                    vp.1 = (vp.1 + dy / h_nonempty).clamp(0.0, 1.0);
                                     *vp
                                 };
                                 callback(InputEvent::MouseMove { x: vx, y: vy });
@@ -382,19 +380,13 @@ impl InputInjector for MacOsInjector {
     }
 }
 
-/// Normaliza `event.location()` (pontos Quartz) para 0..1 com CONVENÇÃO PADRÃO:
-/// (0,0) = canto **superior esquerdo**, (1,1) = canto **inferior direito**.
-///
-/// Quartz: Y=0 no topo do display principal, cresce para baixo → divisão directa (sem inversão).
-/// Consistente com Windows (`normalize_point_against_display_rect`) e `check_boundary`.
+/// Normaliza coordenadas absolutas Quartz no rect virtual completo (*bounding box*
+/// de todos os monitores), coerente com `server.rs`/`check_boundary` e com Windows.
 fn normalize_mouse_standard(loc_x: f64, loc_y: f64) -> (f32, f32) {
-    use core_graphics::display::CGDisplay;
-    let b = CGDisplay::main().bounds();
-    let w = b.size.width.max(1.0);
-    let h = b.size.height.max(1.0);
-    let nx = ((loc_x - b.origin.x) / w).clamp(0.0, 1.0) as f32;
-    let ny = ((loc_y - b.origin.y) / h).clamp(0.0, 1.0) as f32;
-    (nx, ny)
+    let (left, top, w, h) = crate::screen::layout::desktop_bounding_box_cached();
+    crate::screen::layout::normalize_point_against_display_rect(
+        left, top, w, h, loc_x as i32, loc_y as i32,
+    )
 }
 
 fn get_cursor_position() -> Result<(f64, f64), ()> {

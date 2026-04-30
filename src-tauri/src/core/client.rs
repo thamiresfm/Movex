@@ -6,7 +6,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
-use crate::core::stats::get_primary_screen_size;
 use crate::input::events::InputEvent;
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
@@ -456,21 +455,17 @@ async fn run_session<S>(
     };
 
     let monitors = crate::screen::layout::detect_monitors();
+    let (_, _, bbox_w, bbox_h) = monitors.bounding_box();
     let primary = monitors
         .monitors
         .iter()
         .find(|m| m.is_primary)
         .or_else(|| monitors.monitors.first());
-    let (screen_w, screen_h, scale) = primary
-        .map(|m| (m.width, m.height, m.scale_factor))
-        .unwrap_or_else(|| {
-            let (w, h) = get_primary_screen_size();
-            (w, h, 1.0)
-        });
+    let scale = primary.map(|m| m.scale_factor).unwrap_or(1.0_f32);
 
     let local_resolution = ScreenResolution {
-        width: screen_w,
-        height: screen_h,
+        width: bbox_w,
+        height: bbox_h,
         scale_factor: scale,
     };
 
@@ -485,10 +480,10 @@ async fn run_session<S>(
     let mut client_return_peer_pos: Option<PeerPosition> = None;
 
     tracing::debug!(
-        "Cliente: fallback borda de retorno {:?} (monitor {}x{}) — será substituído pela posição de entrada",
+        "Cliente: fallback borda de retorno {:?} (desktop virtual {}x{}) — será substituído pela posição de entrada",
         fallback_peer_pos,
-        screen_w,
-        screen_h,
+        bbox_w,
+        bbox_h,
     );
 
     let mut prev_in_return_strip = false;

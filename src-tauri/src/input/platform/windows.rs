@@ -61,8 +61,8 @@ fn primary_display_bounds() -> (i32, i32, u32, u32) {
     })
 }
 
-fn normalize_cursor_to_primary_01(x: i32, y: i32) -> (f32, f32) {
-    let (left, top, w, h) = primary_display_bounds();
+fn normalize_cursor_virtual_desktop_01(x: i32, y: i32) -> (f32, f32) {
+    let (left, top, w, h) = crate::screen::layout::desktop_bounding_box_cached();
     crate::screen::layout::normalize_point_against_display_rect(left, top, w, h, x, y)
 }
 
@@ -170,8 +170,9 @@ impl InputCapture for WindowsCapture {
                                     return CallNextHookEx(None, n_code, w_param, l_param);
                                 }
 
-                                // Filtro bogus zone: descartar deltas impossíveis
-                                let (_, _, w, h) = primary_display_bounds();
+                                // Filtro bogus + normalização do delta: usar o rect virtual completo,
+                                // coerente com `check_boundary` no servidor (`ScreenLayout` bbox).
+                                let (_, _, w, h) = crate::screen::layout::desktop_bounding_box_cached();
                                 if dx.abs() > w as f32 * 0.45 || dy.abs() > h as f32 * 0.45 {
                                     return CallNextHookEx(None, n_code, w_param, l_param);
                                 }
@@ -208,8 +209,8 @@ impl InputCapture for WindowsCapture {
 
                     // ── Modo local (cursor neste PC) ───────────────────────────────────
                     let event = match msg_type {
-                        v if v == WM_MOUSEMOVE => {
-                            let (nx, ny) = normalize_cursor_to_primary_01(data.pt.x, data.pt.y);
+                            v if v == WM_MOUSEMOVE => {
+                            let (nx, ny) = normalize_cursor_virtual_desktop_01(data.pt.x, data.pt.y);
                             Some(InputEvent::MouseMove { x: nx, y: ny })
                         }
                         v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {

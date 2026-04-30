@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ScreenResolution {
@@ -83,6 +84,21 @@ pub fn normalize_point_against_display_rect(
     let nx = ((x - left) as f32 / wf).clamp(0.0, 1.0);
     let ny = ((y - top) as f32 / hf).clamp(0.0, 1.0);
     (nx, ny)
+}
+
+/// Bounding box cache da área de trabalho **virtual completa** (todos os monitores).
+/// Necessário para detecção de borda KMS: com multi-monitor, o utilizador pode mover o
+/// cursor entre monitores no SO, mas a normalização relativa apenas ao rect do primário
+/// impedia detectar corretamente a borda física onde está o outro PC — o Barrier usa o
+/// mesmo princípio (desktop virtual → bounding box).
+///
+/// Calculado só na primeira utilização (tal como antes com apenas o primário).
+static DESKTOP_BBOX_CACHE: OnceLock<(i32, i32, u32, u32)> = OnceLock::new();
+
+/// Origem `(min_x, min_y)` e tamanho `(width, height)` do rect que engloba todos os monitores.
+#[inline]
+pub fn desktop_bounding_box_cached() -> (i32, i32, u32, u32) {
+    *DESKTOP_BBOX_CACHE.get_or_init(|| detect_monitors().bounding_box())
 }
 
 /// Detecta monitores disponíveis na plataforma atual

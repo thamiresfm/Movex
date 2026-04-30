@@ -61,6 +61,23 @@ mod tests {
         ));
     }
 
+    /// Simula desktop virtual dois monitores 1920+1920 horizontal — borda física onde está o Mac.
+    #[test]
+    fn desktop_virtual_horizontal_borda_direita_detecta_peer() {
+        let layout = ScreenLayout {
+            local: ScreenResolution { width: 3840, height: 1080, scale_factor: 1.0 },
+            peer: None,
+            peer_position: PeerPosition::Right,
+        };
+        match check_boundary(3838.0, 400.0, &layout) {
+            BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
+                assert!((entry_x - 0.0).abs() < 0.01);
+                assert!((entry_y - (400.0 / 1080.0)).abs() < 0.05);
+            }
+            BoundaryResult::Local => panic!("deveria cruzar na borda do segundo monitor"),
+        }
+    }
+
     #[test]
     fn borda_esquerda_nao_cruza_se_peer_e_direita() {
         assert_eq!(check_boundary(0.0, 540.0, &layout_1920x1080_right()), BoundaryResult::Local);
