@@ -749,4 +749,37 @@ mod tests {
         assert_eq!(derived, PeerPosition::Left,
             "Cursor que entrou pela esquerda deve retornar pela esquerda");
     }
+
+    // Validar mapeamento completo com os valores exactos que o servidor envia:
+    // boundary.rs: Right  → entry_x=0.0 | Left  → entry_x=1.0
+    //              Below  → entry_y=0.0 | Above → entry_y=1.0
+
+    #[test]
+    fn servidor_peer_right_envia_entry_x_zero_retorna_left() {
+        // Servidor peer_position=Right → cursor sai pela direita do servidor
+        // → entra no cliente pela esquerda → entry_x=0.0
+        assert_eq!(derive_return_edge_from_entry(0.0, 0.4), PeerPosition::Left);
+    }
+
+    #[test]
+    fn servidor_peer_left_envia_entry_x_um_retorna_right() {
+        assert_eq!(derive_return_edge_from_entry(1.0, 0.6), PeerPosition::Right);
+    }
+
+    #[test]
+    fn servidor_peer_below_envia_entry_y_zero_retorna_above() {
+        assert_eq!(derive_return_edge_from_entry(0.5, 0.0), PeerPosition::Above);
+    }
+
+    #[test]
+    fn servidor_peer_above_envia_entry_y_um_retorna_below() {
+        assert_eq!(derive_return_edge_from_entry(0.3, 1.0), PeerPosition::Below);
+    }
+
+    #[test]
+    fn canto_superior_esquerdo_prioridade_x() {
+        // entry_x=0.0 E entry_y=0.0: o servidor sempre envia UMA coordenada exacta
+        // (0.0 ou 1.0), portanto entrada no canto é via borda X (Left) quando entry_x=0
+        assert_eq!(derive_return_edge_from_entry(0.0, 0.0), PeerPosition::Left);
+    }
 }
