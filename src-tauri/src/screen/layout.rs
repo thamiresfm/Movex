@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -92,10 +93,14 @@ pub fn normalize_point_against_display_rect(
 /// impedia detectar corretamente a borda física onde está o outro PC — o Barrier usa o
 /// mesmo princípio (desktop virtual → bounding box).
 ///
+/// Apenas compilado em macOS/Windows: no Linux CI o input KMS usa apenas stubs e isto ficaria morto (`dead_code`).
+///
 /// Calculado só na primeira utilização (tal como antes com apenas o primário).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 static DESKTOP_BBOX_CACHE: OnceLock<(i32, i32, u32, u32)> = OnceLock::new();
 
 /// Origem `(min_x, min_y)` e tamanho `(width, height)` do rect que engloba todos os monitores.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[inline]
 pub fn desktop_bounding_box_cached() -> (i32, i32, u32, u32) {
     *DESKTOP_BBOX_CACHE.get_or_init(|| detect_monitors().bounding_box())
