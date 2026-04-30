@@ -468,18 +468,25 @@ async fn run_session<S>(
             (w, h, 1.0)
         });
 
-    let client_return_layout = ScreenLayout {
-        local: ScreenResolution {
-            width: screen_w,
-            height: screen_h,
-            scale_factor: scale,
-        },
-        peer: None,
-        peer_position: peer_from_settings.invert(),
+    let local_resolution = ScreenResolution {
+        width: screen_w,
+        height: screen_h,
+        scale_factor: scale,
     };
+
+    // `client_return_peer_pos` é derivado automaticamente da posição de entrada
+    // enviada pelo servidor (entry_x / entry_y no primeiro MouseMove após EnterScreen).
+    // Isso elimina a dependência das configurações locais do cliente, que poderiam
+    // estar configuradas de forma assimétrica em relação ao servidor.
+    //
+    // Fallback: peer_from_settings.invert() para compatibilidade quando a posição
+    // de entrada ainda não foi recebida.
+    let fallback_peer_pos = peer_from_settings.invert();
+    let mut client_return_peer_pos: Option<PeerPosition> = None;
+
     tracing::debug!(
-        "Cliente: borda de retorno {:?} (monitor {}x{})",
-        client_return_layout.peer_position,
+        "Cliente: fallback borda de retorno {:?} (monitor {}x{}) — será substituído pela posição de entrada",
+        fallback_peer_pos,
         screen_w,
         screen_h,
     );
@@ -540,6 +547,8 @@ async fn run_session<S>(
                         // dispara edge_enter=true e devolve o cursor ao servidor antes de
                         // o utilizador ver qualquer coisa no PC remoto.
                         prev_in_return_strip = true;
+                        // Resetar: a borda de retorno será re-derivada do primeiro MouseMove
+                        client_return_peer_pos = None;
                         state.active_screen_remote.store(true, Ordering::Release);
                         {
                             let mut active = state.active_screen.lock().await;
@@ -560,19 +569,42 @@ async fn run_session<S>(
                     Ok(Message::Input(event)) => {
                         if !state.active_screen_remote.load(Ordering::Acquire) {
                             prev_in_return_strip = false;
+                            client_return_peer_pos = None;
                         } else if let InputEvent::MouseMove { x, y } = &event {
-                            let px = x * client_return_layout.local.width as f32;
-                            let py = y * client_return_layout.local.height as f32;
+                            // Derivar borda de retorno automaticamente a partir da posição
+                            // de entrada (primeiro MouseMove após EnterScreen).
+                            // entry_x ≈ 0 → cursor entrou pela esquerda → retorno pela esquerda
+                            // entry_x ≈ 1 → cursor entrou pela direita  → retorno pela direita
+                            // entry_y ≈ 0 → cursor entrou por cima      → retorno por cima
+                            // entry_y ≈ 1 → cursor entrou por baixo     → retorno por baixo
+                            if client_return_peer_pos.is_none() {
+                                let derived = derive_return_edge_from_entry(*x, *y);
+                                tracing::info!(
+                                    "Borda de retorno derivada da entrada ({:.3},{:.3}): {:?}",
+                                    x, y, derived
+                                );
+                                client_return_peer_pos = Some(derived);
+                            }
+
+                            let return_pos = client_return_peer_pos.unwrap_or(fallback_peer_pos);
+                            let return_layout = ScreenLayout {
+                                local: local_resolution,
+                                peer: None,
+                                peer_position: return_pos,
+                            };
+
+                            let px = x * return_layout.local.width as f32;
+                            let py = y * return_layout.local.height as f32;
                             let in_strip = matches!(
-                                check_boundary(px, py, &client_return_layout),
+                                check_boundary(px, py, &return_layout),
                                 BoundaryResult::CrossedToPeer { .. }
                             );
                             let edge_enter = in_strip && !prev_in_return_strip;
                             prev_in_return_strip = in_strip;
                             if edge_enter {
                                 info!(
-                                    "Borda de retorno ao servidor (layout {:?}) — enviando LeaveScreen",
-                                    peer_from_settings
+                                    "Borda de retorno ao servidor (return_pos={:?}) — enviando LeaveScreen",
+                                    return_pos
                                 );
                                 let mtx = state.message_tx.lock().await;
                                 if let Some(tx) = mtx.as_ref() {
@@ -580,6 +612,7 @@ async fn run_session<S>(
                                 }
                                 drop(mtx);
                                 state.active_screen_remote.store(false, Ordering::Release);
+                                client_return_peer_pos = None;
                                 let mut active = state.active_screen.lock().await;
                                 *active = ActiveScreen::Local;
                                 drop(active);
@@ -659,4 +692,61 @@ async fn run_session<S>(
     drop(started);
     state.stats.reset();
     crate::ipc::emit_status_to_main(&state).await;
+}
+
+/// Deriva a borda de retorno ao servidor a partir da posição de entrada do cursor.
+///
+/// O servidor envia `entry_x = 0.0` quando o cursor entra pela borda ESQUERDA do
+/// cliente, e `entry_x = 1.0` quando entra pela borda DIREITA. Analogamente para
+/// `entry_y`. Esta função inverte essa lógica: a borda de retorno é a borda pela
+/// qual o cursor entrou.
+///
+/// Isso elimina a dependência da configuração local `peer_position` do cliente,
+/// que poderia estar configurada de forma assimétrica em relação ao servidor.
+fn derive_return_edge_from_entry(entry_x: f32, entry_y: f32) -> PeerPosition {
+    const EDGE_MARGIN: f32 = 0.05;
+    if entry_x < EDGE_MARGIN {
+        PeerPosition::Left
+    } else if entry_x > 1.0 - EDGE_MARGIN {
+        PeerPosition::Right
+    } else if entry_y < EDGE_MARGIN {
+        PeerPosition::Above
+    } else {
+        PeerPosition::Below
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_return_edge_entrada_esquerda() {
+        assert_eq!(derive_return_edge_from_entry(0.0, 0.5), PeerPosition::Left);
+    }
+
+    #[test]
+    fn derive_return_edge_entrada_direita() {
+        assert_eq!(derive_return_edge_from_entry(1.0, 0.5), PeerPosition::Right);
+    }
+
+    #[test]
+    fn derive_return_edge_entrada_cima() {
+        assert_eq!(derive_return_edge_from_entry(0.5, 0.0), PeerPosition::Above);
+    }
+
+    #[test]
+    fn derive_return_edge_entrada_baixo() {
+        assert_eq!(derive_return_edge_from_entry(0.5, 1.0), PeerPosition::Below);
+    }
+
+    #[test]
+    fn derive_return_edge_configura_assimetricamente_funciona() {
+        // Servidor=Right (cursor entra pela esquerda do cliente, entry_x=0)
+        // Mesmo que o cliente tenha peer_position=Left (configuração "intuitiva"),
+        // a derivação devolve Left (correto) independentemente das settings.
+        let derived = derive_return_edge_from_entry(0.0, 0.3);
+        assert_eq!(derived, PeerPosition::Left,
+            "Cursor que entrou pela esquerda deve retornar pela esquerda");
+    }
 }

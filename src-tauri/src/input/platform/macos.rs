@@ -170,6 +170,17 @@ impl InputCapture for MacOsCapture {
                                 }
                                 return None;
                             }
+                            // Scroll encaminhado ao PC remoto e suprimido localmente para
+                            // evitar que o scroll se aplique simultaneamente nos dois PCs.
+                            CGEventType::ScrollWheel => {
+                                use core_graphics::event::EventField;
+                                let dy = event.get_integer_value_field(
+                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1) as f32;
+                                let dx = event.get_integer_value_field(
+                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2) as f32;
+                                callback(InputEvent::MouseScroll { dx, dy });
+                                return None;
+                            }
                             _ => {}
                         }
                     }
