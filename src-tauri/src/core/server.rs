@@ -23,7 +23,7 @@ async fn server_resume_listening(state: &SharedState) {
         let mut started = state.session_started_at.lock().await;
         *started = None;
     }
-    crate::emit_status_to_main(state).await;
+    crate::ipc::emit_status_to_main(state).await;
 }
 
 /// Inicia o servidor Movex com cancelamento e envio de input ao cliente.
@@ -51,7 +51,7 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Listening;
     }
-    crate::emit_status_to_main(&state).await;
+    crate::ipc::emit_status_to_main(&state).await;
 
     loop {
         tokio::select! {
@@ -89,7 +89,7 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                             let mut status = state.connection_status.lock().await;
                             *status = ConnectionStatus::Connecting;
                         }
-                        crate::emit_status_to_main(&state).await;
+                        crate::ipc::emit_status_to_main(&state).await;
 
                         let state_clone = state.clone();
                         let cancel_clone = cancel.clone();
@@ -204,7 +204,7 @@ async fn handle_client<S>(
         let mut started = state.session_started_at.lock().await;
         *started = Some(std::time::Instant::now());
     }
-    crate::emit_status_to_main(&state).await;
+    crate::ipc::emit_status_to_main(&state).await;
 
     let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
     { *state.message_tx.lock().await = Some(msg_tx.clone()); }
@@ -334,7 +334,7 @@ async fn handle_client<S>(
                                 *latency_ms = rtt_ms;
                             }
                             drop(status);
-                            crate::emit_status_to_main(&state).await;
+                            crate::ipc::emit_status_to_main(&state).await;
                         }
                     }
                     Ok(Message::LeaveScreen) => {

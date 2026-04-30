@@ -23,7 +23,7 @@ async fn connection_failed_client(state: &SharedState) {
         let mut status = state.connection_status.lock().await;
         *status = ConnectionStatus::Disconnected;
     }
-    crate::emit_status_to_main(state).await;
+    crate::ipc::emit_status_to_main(state).await;
 }
 
 /// Conecta a um endereço específico (descoberto via mDNS) sem alterar settings persistidas.
@@ -117,7 +117,7 @@ pub async fn connect_to_addr(
             let mut started = state.session_started_at.lock().await;
             *started = Some(std::time::Instant::now());
         }
-        crate::emit_status_to_main(&state).await;
+        crate::ipc::emit_status_to_main(&state).await;
         state
             .user_visible_connection_success(&format!("Ligado a «{peer_hostname}» ({target})."))
             .await;
@@ -268,7 +268,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             let mut status = state.connection_status.lock().await;
             *status = ConnectionStatus::Connecting;
         }
-        crate::emit_status_to_main(&state).await;
+        crate::ipc::emit_status_to_main(&state).await;
 
         let connect_result = tokio::select! {
             _ = cancel.cancelled() => {
@@ -320,7 +320,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                                 let mut started = state.session_started_at.lock().await;
                                 *started = Some(std::time::Instant::now());
                             }
-                            crate::emit_status_to_main(&state).await;
+                            crate::ipc::emit_status_to_main(&state).await;
                             state
                                 .user_visible_connection_success(&format!(
                                     "Ligado ao servidor «{peer_hostname}» ({addr})."
@@ -376,7 +376,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                         )
                         .await;
                 }
-                crate::emit_status_to_main(&state).await;
+                crate::ipc::emit_status_to_main(&state).await;
             }
             Err(_) => {
                 warn!("Timeout ao conectar em {}", addr);
@@ -398,7 +398,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                         )
                         .await;
                 }
-                crate::emit_status_to_main(&state).await;
+                crate::ipc::emit_status_to_main(&state).await;
             }
         }
 
@@ -414,7 +414,7 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
             let mut started = state.session_started_at.lock().await;
             *started = None;
         }
-        crate::emit_status_to_main(&state).await;
+        crate::ipc::emit_status_to_main(&state).await;
         info!("Tentativa {}: reconectando em {}s...", attempt + 1, wait.as_secs());
 
         tokio::select! {
@@ -546,7 +546,7 @@ async fn run_session<S>(
                             *active = ActiveScreen::Remote;
                         }
                         info!("Cursor entrou nesta máquina (modo remoto activado)");
-                        crate::emit_status_to_main(&state).await;
+                        crate::ipc::emit_status_to_main(&state).await;
             }
             Ok(Message::LeaveScreen) => {
                         state.active_screen_remote.store(false, Ordering::Release);
@@ -555,7 +555,7 @@ async fn run_session<S>(
                             *active = ActiveScreen::Local;
                         }
                         info!("Cursor voltou a esta máquina (modo local)");
-                        crate::emit_status_to_main(&state).await;
+                        crate::ipc::emit_status_to_main(&state).await;
             }
                     Ok(Message::Input(event)) => {
                         if !state.active_screen_remote.load(Ordering::Acquire) {
@@ -583,7 +583,7 @@ async fn run_session<S>(
                                 let mut active = state.active_screen.lock().await;
                                 *active = ActiveScreen::Local;
                                 drop(active);
-                                crate::emit_status_to_main(&state).await;
+                                crate::ipc::emit_status_to_main(&state).await;
                             }
                         } else {
                             prev_in_return_strip = false;
@@ -634,7 +634,7 @@ async fn run_session<S>(
                                 *latency_ms = rtt;
                             }
                             drop(status);
-                            crate::emit_status_to_main(&state).await;
+                            crate::ipc::emit_status_to_main(&state).await;
                         }
             }
             Ok(Message::Disconnect { reason }) => {
@@ -658,5 +658,5 @@ async fn run_session<S>(
     drop(status);
     drop(started);
     state.stats.reset();
-    crate::emit_status_to_main(&state).await;
+    crate::ipc::emit_status_to_main(&state).await;
 }
