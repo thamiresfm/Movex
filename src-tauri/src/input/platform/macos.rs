@@ -1,21 +1,21 @@
-/// Captura e injecção de eventos de rato/teclado no macOS.
-///
-/// # Padrão Barrier/Input-Leap (implementação comprovada)
-///
-/// O Barrier resolve o problema "cursor clipped at edge → delta=0" assim:
-/// 1. `lock_cursor`: warp para o CENTRO do ecrã (não para a borda).
-///    Actualizar `prev_pos = center` ANTES do warp para que o evento sintético
-///    gerado pelo CGWarpMouseCursorPosition tenha `delta = center - center = 0`.
-/// 2. Callback locked: `dx = event.location().x - prev_pos.x`,
-///    depois `prev_pos = center`, depois warp para centro.
-///    O próximo evento sintético tem `dx = 0` → skip automático.
-/// 3. Filtro "bogus zone": descartar deltas > 90% da semi-largura
-///    (artefacto residual de qualquer warp inesperado).
-///
-/// Esta abordagem garante que:
-/// - O cursor nunca fica clipado na borda → deltas sempre não-nulos
-/// - O evento sintético do warp tem sempre delta=0 → sem loop infinito
-/// - A velocidade do cursor inclui a aceleração do macOS (via location diff)
+//! Captura e injecção de eventos de rato/teclado no macOS.
+//!
+//! # Padrão Barrier/Input-Leap (implementação comprovada)
+//!
+//! O Barrier resolve o problema "cursor clipped at edge → delta=0" assim:
+//! 1. `lock_cursor`: warp para o CENTRO do ecrã (não para a borda).
+//!    Actualizar `prev_pos = center` ANTES do warp para que o evento sintético
+//!    gerado pelo CGWarpMouseCursorPosition tenha `delta = center - center = 0`.
+//! 2. Callback locked: `dx = event.location().x - prev_pos.x`,
+//!    depois `prev_pos = center`, depois warp para centro.
+//!    O próximo evento sintético tem `dx = 0` → skip automático.
+//! 3. Filtro "bogus zone": descartar deltas > 90% da semi-largura
+//!    (artefacto residual de qualquer warp inesperado).
+//!
+//! Esta abordagem garante que:
+//! - O cursor nunca fica clipado na borda → deltas sempre não-nulos
+//! - O evento sintético do warp tem sempre delta=0 → sem loop infinito
+//! - A velocidade do cursor inclui a aceleração do macOS (via location diff)
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
