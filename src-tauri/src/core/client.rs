@@ -487,6 +487,10 @@ async fn run_session<S>(
     );
 
     let mut prev_in_return_strip = false;
+    // macOS: sem Acessibilidade o `CGEvent::post` em `inject_event` é descartado
+    // silenciosamente — o utilizador vê EnterScreen no log mas o cursor não se mexe.
+    // Avisamos uma única vez por sessão, na primeira injeção pendente.
+    let mut permission_warning_emitted = false;
 
     loop {
         tokio::select! {
@@ -615,6 +619,15 @@ async fn run_session<S>(
                             }
                         } else {
                             prev_in_return_strip = false;
+                        }
+                        if !permission_warning_emitted
+                            && !crate::permissions::macos_accessibility_trusted()
+                        {
+                            permission_warning_emitted = true;
+                            state.user_visible_connection_error(
+                                "Movex — Permissão de Acessibilidade",
+                                "O outro PC está a enviar o mouse, mas o macOS está a bloquear a injeção. Abra Ajustes do Sistema → Privacidade e Segurança → Acessibilidade, ative Movex e feche/reabra o app.",
+                            ).await;
                         }
                         inject_event(event);
                     }

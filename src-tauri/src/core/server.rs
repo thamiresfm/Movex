@@ -301,6 +301,15 @@ async fn handle_client<S>(
         warn!("Captura de input indisponível: {} — verifique permissão de Acessibilidade", e);
     }
 
+    // macOS: sem permissão de Acessibilidade o CGEventTap falha em background e o
+    // utilizador nunca recebe feedback. Emitir aviso visível na primeira sessão.
+    if !crate::permissions::macos_accessibility_trusted() {
+        state.user_visible_connection_error(
+            "Movex — Permissão de Acessibilidade",
+            "Sem Acessibilidade no macOS, o Movex não captura o seu mouse/teclado neste PC. Abra Ajustes do Sistema → Privacidade e Segurança → Acessibilidade, ative Movex e feche/reabra o app.",
+        ).await;
+    }
+
     let mut file_receiver = match crate::transfer::FileReceiver::new().await {
         Ok(r) => Some(r),
         Err(e) => { tracing::warn!("FileReceiver indisponível: {}", e); None }

@@ -47,6 +47,24 @@ pub fn request_macos_accessibility_prompt() {
 #[cfg(not(target_os = "macos"))]
 pub fn request_macos_accessibility_prompt() {}
 
+/// Verifica (sem disparar diálogo) se o Movex tem permissão de Acessibilidade no macOS.
+/// Em outras plataformas devolve sempre `true` — não existe equivalente.
+///
+/// Sem esta permissão o macOS descarta silenciosamente `CGEvent::post` (injeção do
+/// cliente) e `CGEventTap::new` falha (captura do servidor) — o utilizador vê tudo
+/// "ligado" mas o mouse não se move.
+#[cfg(target_os = "macos")]
+pub fn macos_accessibility_trusted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> u8;
+    }
+    unsafe { AXIsProcessTrusted() != 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn macos_accessibility_trusted() -> bool { true }
+
 /// Abre o painel do sistema correspondente (Privacidade, Notificações, Firewall, etc.).
 #[tauri::command]
 pub fn open_system_settings(panel: String) -> Result<(), String> {
