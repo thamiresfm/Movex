@@ -61,6 +61,11 @@ impl InputCapture for MacOsCapture {
         let running  = Arc::clone(&self.running);
         let virt_pos = Arc::clone(&self.virt_pos);
 
+        // Canal síncrono usado pelo thread para reportar o resultado da criação do
+        // CGEventTap. Sem isto, a falha fica silenciosa quando Acessibilidade está
+        // desligada: a captura "está iniciada" mas nunca dispara nenhum evento.
+        let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+
         std::thread::spawn(move || {
             use core_graphics::event::{
                 CGEventTap, CGEventTapLocation, CGEventTapPlacement,
@@ -241,8 +246,10 @@ impl InputCapture for MacOsCapture {
                     let loop_src = match tap.mach_port.create_runloop_source(0) {
                         Ok(s) => s,
                         Err(_) => {
-                            error!("MacOsCapture: falha ao criar RunLoopSource");
+                            let msg = "falha ao criar RunLoopSource".to_string();
+                            error!("MacOsCapture: {}", msg);
                             running.store(false, Ordering::SeqCst);
+                            let _ = init_tx.send(Err(msg));
                             return;
                         }
                     };
@@ -251,6 +258,7 @@ impl InputCapture for MacOsCapture {
                         core_foundation::runloop::kCFRunLoopDefaultMode
                     });
                     tap.enable();
+                    let _ = init_tx.send(Ok(()));
                     while running.load(Ordering::SeqCst) {
                         unsafe {
                             core_foundation::runloop::CFRunLoop::run_in_mode(
@@ -263,14 +271,23 @@ impl InputCapture for MacOsCapture {
                     info!("MacOsCapture: loop encerrado");
                 }
                 Err(e) => {
-                    error!("CGEventTap falhou: {:?} — verifique permissão de Acessibilidade", e);
+                    let msg = format!("CGEventTap falhou: {:?} — verifique permissão de Acessibilidade", e);
+                    error!("{}", msg);
                     running.store(false, Ordering::SeqCst);
+                    let _ = init_tx.send(Err(msg));
                 }
             }
         });
 
-        info!("MacOsCapture: captura iniciada");
-        Ok(())
+        // Aguardar até 3 s pela criação do CGEventTap.
+        match init_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Ok(())) => {
+                info!("MacOsCapture: captura iniciada");
+                Ok(())
+            }
+            Ok(Err(msg)) => Err(msg),
+            Err(_) => Err("timeout a aguardar criação do CGEventTap".to_string()),
+        }
     }
 
     fn stop(&self) {

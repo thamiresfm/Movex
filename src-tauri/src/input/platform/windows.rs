@@ -118,6 +118,11 @@ impl InputCapture for WindowsCapture {
         let running = std::sync::Arc::clone(&self.running);
         set_hook_cb(Some(std::sync::Arc::new(callback)));
 
+        // Canal síncrono usado pelo thread para reportar o resultado da instalação dos
+        // hooks. Sem isto, falhas de SetWindowsHookExW (UAC, KVM concorrente) ficam
+        // silenciosas — captura aparenta "ligada" mas o servidor nunca recebe eventos.
+        let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+
         std::thread::spawn(move || {
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowsHookExW, UnhookWindowsHookEx,
@@ -276,22 +281,27 @@ impl InputCapture for WindowsCapture {
                 let mouse_hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0) {
                     Ok(h) => h,
                     Err(e) => {
-                        error!("WindowsCapture: falha ao instalar hook de mouse: {}", e);
+                        let msg = format!("falha ao instalar WH_MOUSE_LL: {} (outro KVM em execução? tentar como Administrador)", e);
+                        error!("WindowsCapture: {}", msg);
                         running.store(false, Ordering::SeqCst);
+                        let _ = init_tx.send(Err(msg));
                         return;
                     }
                 };
                 let kb_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0) {
                     Ok(h) => h,
                     Err(e) => {
-                        error!("WindowsCapture: falha ao instalar hook de teclado: {}", e);
+                        let msg = format!("falha ao instalar WH_KEYBOARD_LL: {}", e);
+                        error!("WindowsCapture: {}", msg);
                         UnhookWindowsHookEx(mouse_hook).ok();
                         running.store(false, Ordering::SeqCst);
+                        let _ = init_tx.send(Err(msg));
                         return;
                     }
                 };
 
                 info!("WindowsCapture: hooks instalados (padrão Barrier)");
+                let _ = init_tx.send(Ok(()));
 
                 let mut msg = MSG::default();
                 while running.load(Ordering::SeqCst) {
@@ -311,8 +321,15 @@ impl InputCapture for WindowsCapture {
             }
         });
 
-        info!("WindowsCapture: captura iniciada");
-        Ok(())
+        // Aguardar até 3 s pelo resultado da instalação dos hooks.
+        match init_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Ok(())) => {
+                info!("WindowsCapture: captura iniciada");
+                Ok(())
+            }
+            Ok(Err(msg)) => Err(msg),
+            Err(_) => Err("timeout a aguardar instalação dos hooks Windows".to_string()),
+        }
     }
 
     fn stop(&self) {

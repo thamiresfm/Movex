@@ -269,6 +269,10 @@ async fn handle_client<S>(
                 let py = y * layout_clone.local.height as f32;
                 match check_boundary(px, py, &layout_clone) {
                     BoundaryResult::CrossedToPeer { entry_x, entry_y } => {
+                        tracing::info!(
+                            "Borda cruzada — enviando EnterScreen ao cliente (entry={:.3},{:.3})",
+                            entry_x, entry_y
+                        );
                         // Passar entry_x/entry_y ao lock para que o cursor virtual
                         // no macOS comece na posição correcta do ecrã remoto.
                         capture_ref_for_boundary.lock_cursor(entry_x, entry_y);
@@ -298,15 +302,24 @@ async fn handle_client<S>(
     }));
 
     if let Err(e) = capture_result {
-        warn!("Captura de input indisponível: {} — verifique permissão de Acessibilidade", e);
-    }
-
-    // macOS: sem permissão de Acessibilidade o CGEventTap falha em background e o
-    // utilizador nunca recebe feedback. Emitir aviso visível na primeira sessão.
-    if !crate::permissions::macos_accessibility_trusted() {
+        warn!("Captura de input indisponível: {}", e);
+        // Visível ao utilizador (toast + log no painel) — sem isto a sessão fica
+        // "ligada" mas nada cruza. Mensagem cobre ambas as plataformas.
+        state.user_visible_connection_error(
+            "Movex — Captura indisponível",
+            &format!(
+                "Não foi possível instalar a captura de mouse/teclado neste PC: {}. \
+                 macOS: Ajustes → Privacidade → Acessibilidade (ativar Movex e reabrir). \
+                 Windows: feche outro KVM (Barrier/Synergy/Deskflow) ou execute como Administrador.",
+                e
+            ),
+        ).await;
+    } else if !crate::permissions::macos_accessibility_trusted() {
+        // macOS: a tap pode ter sido criada mas o sistema descarta os eventos sem
+        // permissão de Acessibilidade. Aviso explícito antes de o utilizador tentar.
         state.user_visible_connection_error(
             "Movex — Permissão de Acessibilidade",
-            "Sem Acessibilidade no macOS, o Movex não captura o seu mouse/teclado neste PC. Abra Ajustes do Sistema → Privacidade e Segurança → Acessibilidade, ative Movex e feche/reabra o app.",
+            "Sem Acessibilidade no macOS o Movex não captura o seu mouse/teclado neste PC. Abra Ajustes do Sistema → Privacidade e Segurança → Acessibilidade, ative Movex e feche/reabra o app.",
         ).await;
     }
 
