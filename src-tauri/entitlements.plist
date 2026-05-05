@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Entitlements para builds ad-hoc do Movex no macOS.
+    Padrão usado também pelo Deskflow (ver cmake/MacCodesign.cmake) — relaxa
+    library-validation e permite get-task-allow + JIT, suficientes para que
+    a tap CGEventTap e a injeção CGEvent::post funcionem com hardened runtime.
+
+    Não substituem um Developer ID — o TCC do macOS continua a ancorar no
+    CD hash do binário e a permissão de Acessibilidade ainda precisa de ser
+    re-concedida após cada upgrade. Mas estabilizam o TCC dentro de uma
+    mesma versão (não exige reset depois de cada Cmd+Q/reabrir).
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+  <key>com.apple.security.get-task-allow</key><true/>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+</dict>
+</plist>

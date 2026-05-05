@@ -208,8 +208,17 @@ impl InputCapture for WindowsCapture {
                         if let Some(ev) = event {
                             call_hook_cb(ev);
                         }
-                        // Suprimir evento local enquanto bloqueado (exceto scroll que não interfere)
-                        return CallNextHookEx(None, n_code, w_param, l_param);
+                        // Suprimir evento local enquanto bloqueado: retornar LRESULT
+                        // não-zero faz o Windows DESCARTAR o evento (o cursor não se
+                        // mexe nesta máquina). Antes chamávamos CallNextHookEx, o que
+                        // passava o evento adiante e o cursor local andava em paralelo
+                        // com o cursor remoto — sintoma "duplicado/espelhado" que o
+                        // utilizador relatou.
+                        //
+                        // Os eventos sintéticos do SetCursorPos (delta ≈ 0) já saem
+                        // antes via early return com CallNextHookEx (acima), portanto
+                        // o warp para o centro continua a funcionar.
+                        return LRESULT(1);
                     }
 
                     // ── Modo local (cursor neste PC) ───────────────────────────────────

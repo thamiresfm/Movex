@@ -65,7 +65,7 @@ impl FileReceiver {
         id: u32,
         checksum: [u8; 32],
     ) -> Result<(String, PathBuf), String> {
-        let t = self
+        let mut t = self
             .transfers
             .remove(&id)
             .ok_or_else(|| format!("Transferência {} não encontrada", id))?;
@@ -77,6 +77,12 @@ impl FileReceiver {
             error!("Checksum inválido para '{}'", t.name);
             return Err(format!("Checksum inválido para '{}'", t.name));
         }
+
+        // Garantir que dados estão no disco antes do rename. Sem isto o conteúdo
+        // pode estar só no buffer da File handle, e uma leitura imediata após o
+        // rename (ex.: o teste `receiver_full_roundtrip`) vê o arquivo vazio.
+        t.file.flush().await.map_err(|e| e.to_string())?;
+        t.file.sync_all().await.map_err(|e| e.to_string())?;
 
         let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
         let dest = self.unique_path(&self.downloads_dir.join(&t.name));
