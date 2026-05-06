@@ -15,13 +15,22 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
     // leitura — não exige elevação — e dá-nos a verdade do sistema em cada Connect.
     #[cfg(target_os = "windows")]
     {
-        let (port, role_hint) = {
+        let (port, role_hint, prompt_done) = {
             let s = state.settings.lock().await;
-            (s.port, s.role.clone())
+            (s.port, s.role.clone(), s.windows_firewall_prompt_done)
         };
-        let need_fw = !crate::permissions::windows_firewall_rules_present_async(port).await;
-        if need_fw {
-            tracing::info!("Windows: regras Movex em falta — a pedir permissão (UAC).");
+        let rules_present = crate::permissions::windows_firewall_rules_present_async(port).await;
+
+        // Pedir UAC automaticamente apenas quando:
+        //   (a) as regras estão de facto ausentes, E
+        //   (b) ainda não pedimos automaticamente nesta instalação.
+        //
+        // Sem (b), se o utilizador clicar «Não» no UAC, o próximo Connect
+        // re-dispararia UAC infinitamente — sintoma "UAC em loop".
+        // O botão explícito "Aplicar regras no firewall (admin)" no painel
+        // continua a ignorar este flag para o utilizador poder retentar à mão.
+        if !rules_present && !prompt_done {
+            tracing::info!("Windows: regras Movex em falta — pedir UAC (1.ª vez).");
             if let Some(app) = state.app_handle.lock().await.as_ref() {
                 let body = match role_hint {
                     Role::Server => "Vai abrir o pedido do Windows (UAC). Aceite «Sim» para permitir o Movex na porta da rede (servidor).",
@@ -33,6 +42,9 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
                 Ok(msg) => tracing::info!("{msg}"),
                 Err(e) => tracing::warn!("Firewall (pedido automático): {e}"),
             }
+            // Marcar como já pedido — independentemente de o utilizador ter
+            // aceitado ou recusado. Se recusou, pode retentar pelo botão
+            // explícito; nunca mais re-pedimos automaticamente.
             {
                 let mut s = state.settings.lock().await;
                 s.windows_firewall_prompt_done = true;
@@ -40,8 +52,10 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
                     tracing::warn!("Erro ao gravar windows_firewall_prompt_done: {e}");
                 }
             }
-        } else {
+        } else if rules_present {
             tracing::debug!("Windows: regras Movex já presentes — sem pedido de UAC.");
+        } else {
+            tracing::debug!("Windows: regras ausentes mas UAC já foi tentado — não re-pedir; usar botão explícito se necessário.");
         }
     }
 
