@@ -534,6 +534,17 @@ export async function renderDashboard(): Promise<void> {
                   <button type="button" id="btnPermWinPrivacy" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">Privacidade</button>
                 </div>
             </div>
+
+              <!-- Diagnóstico -->
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                  <div style="font-size:11px;color:var(--text-3);line-height:1.45;flex:1;min-width:160px;">
+                    Não conecta? Roda o diagnóstico — testa rede, mDNS, TCP e permissões; mostra exatamente onde travou.
+                  </div>
+                  <button type="button" id="btnDiagnose" class="btn btn-outline" style="font-size:11px;padding:6px 10px;font-weight:700;">🔍 Diagnosticar conexão</button>
+                </div>
+                <pre id="diagnoseOutput" style="display:none;margin-top:10px;padding:10px;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto;"></pre>
+              </div>
           </div>
 
             <!-- Peers recentes -->
@@ -1106,6 +1117,85 @@ export async function renderDashboard(): Promise<void> {
     }
   };
 
+  const runDiagnose = async () => {
+    if (!isTauri()) {
+      addLog('Diagnóstico só funciona dentro da aplicação Movex.', 'warn');
+      return;
+    }
+    const out = document.getElementById('diagnoseOutput') as HTMLPreElement | null;
+    const btn = document.getElementById('btnDiagnose') as HTMLButtonElement | null;
+    if (out) {
+      out.style.display = 'block';
+      out.textContent = '⏳ Diagnosticando rede e permissões…';
+    }
+    if (btn) btn.disabled = true;
+    try {
+      type Diag = {
+        local_ips: string[];
+        server_addr: string | null;
+        server_port: number;
+        tcp_reachable: boolean | null;
+        tcp_error: string | null;
+        mdns_peers: string[];
+        firewall_rules_present: boolean;
+        macos_accessibility: boolean;
+        elapsed_ms: number;
+      };
+      const r = await invoke<Diag>('diagnose_connection');
+      const lines: string[] = [];
+      lines.push('═══ Diagnóstico Movex ═══');
+      lines.push(`tempo total: ${r.elapsed_ms} ms`);
+      lines.push('');
+      lines.push('▸ Rede local');
+      lines.push(`  IPs deste PC: ${r.local_ips.join(', ') || '(nenhum)'}`);
+      lines.push('');
+      lines.push('▸ Servidor configurado');
+      if (r.server_addr) {
+        lines.push(`  endereço: ${r.server_addr}:${r.server_port}`);
+        if (r.tcp_reachable === true) {
+          lines.push('  TCP: ✅ alcançável');
+        } else {
+          lines.push(`  TCP: ❌ ${r.tcp_error ?? 'falhou'}`);
+        }
+      } else {
+        lines.push('  ⚠ Sem server_addr — papel Servidor ou ainda não configurado.');
+      }
+      lines.push('');
+      lines.push('▸ mDNS (descoberta automática)');
+      if (r.mdns_peers.length > 0) {
+        for (const p of r.mdns_peers) lines.push(`  ✅ ${p}`);
+      } else {
+        lines.push('  ⚠ nenhum peer Movex anunciado nesta LAN');
+      }
+      lines.push('');
+      lines.push('▸ Permissões locais');
+      lines.push(`  Firewall (Movex rules): ${r.firewall_rules_present ? '✅ presentes' : '❌ ausentes (Windows)'}`);
+      lines.push(`  Acessibilidade macOS:    ${r.macos_accessibility ? '✅ trusted' : '❌ negada (macOS)'}`);
+      lines.push('');
+      lines.push('═══ Sugestões ═══');
+      if (r.tcp_reachable === false) {
+        lines.push('• TCP falhou → firewall do peer (Privada vs Pública), peer offline ou IP errado.');
+      }
+      if (r.mdns_peers.length === 0) {
+        lines.push('• Sem mDNS → o outro PC não está na mesma LAN ou bloqueia UDP 5353.');
+      }
+      if (!r.firewall_rules_present) {
+        lines.push('• Regras de firewall ausentes → use «Aplicar regras no firewall (admin)» (Windows).');
+      }
+      if (!r.macos_accessibility) {
+        lines.push('• Sem Acessibilidade no macOS → cursor/teclado do peer não move este Mac.');
+      }
+      if (r.tcp_reachable === true && r.firewall_rules_present && r.macos_accessibility) {
+        lines.push('• Tudo OK: clica «Conectar» no painel.');
+      }
+      if (out) out.textContent = lines.join('\n');
+    } catch (e) {
+      if (out) out.textContent = `Erro no diagnóstico: ${e}`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  };
+
   const clearServerCertTrust = async () => {
     if (!isTauri()) {
       addLog('Use a aplicação Movex instalada.', 'warn');
@@ -1537,6 +1627,7 @@ export async function renderDashboard(): Promise<void> {
   on('btnPermWinNotif',    () => void openSystemPanel('notifications'));
   on('btnPermWinFirewall', () => void openSystemPanel('firewall'));
   on('btnPermWinPrivacy',  () => void openSystemPanel('privacy'));
+  on('btnDiagnose',        () => void runDiagnose());
   on('btnAddMachine',      addNewMachine);
   on('btnDiagReport',      () => addLog('Relatório completo: em desenvolvimento (use os logs abaixo para diagnóstico).', 'info'));
   on('btnDiagRestart',     () => addLog('Reinício de diagnósticos: apenas registo no log (sem ação no sistema).', 'info'));

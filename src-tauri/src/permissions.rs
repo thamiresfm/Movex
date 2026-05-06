@@ -167,13 +167,15 @@ $port = {port}
 $exe = '{exe_ps}'
 netsh advfirewall firewall delete rule name="Movex TCP $port" 2>$null
 netsh advfirewall firewall delete rule name="Movex UDP $port" 2>$null
-netsh advfirewall firewall delete rule name="Movex App In" 2>$null
-netsh advfirewall firewall delete rule name="Movex App Out" 2>$null
-netsh advfirewall firewall add rule name="Movex TCP $port" dir=in action=allow protocol=TCP localport=$port profile=any
-netsh advfirewall firewall add rule name="Movex UDP $port" dir=in action=allow protocol=UDP localport=$port profile=any
-netsh advfirewall firewall add rule name="Movex App In" dir=in action=allow program="$exe" profile=any
-netsh advfirewall firewall add rule name="Movex App Out" dir=out action=allow program="$exe" profile=any
-Write-Host 'Regras Movex aplicadas (TCP/UDP porta' $port 'e programa).'
+netsh advfirewall firewall delete rule name="Movex mDNS"      2>$null
+netsh advfirewall firewall delete rule name="Movex App In"    2>$null
+netsh advfirewall firewall delete rule name="Movex App Out"   2>$null
+netsh advfirewall firewall add rule name="Movex TCP $port" dir=in  action=allow protocol=TCP localport=$port profile=any
+netsh advfirewall firewall add rule name="Movex UDP $port" dir=in  action=allow protocol=UDP localport=$port profile=any
+netsh advfirewall firewall add rule name="Movex mDNS"      dir=in  action=allow protocol=UDP localport=5353  profile=any
+netsh advfirewall firewall add rule name="Movex App In"    dir=in  action=allow program="$exe" profile=any
+netsh advfirewall firewall add rule name="Movex App Out"   dir=out action=allow program="$exe" profile=any
+Write-Host 'Regras Movex aplicadas (TCP/UDP porta' $port ', mDNS 5353, programa).'
 "#,
         port = port,
         exe_ps = exe_ps
@@ -210,3 +212,33 @@ Write-Host 'Regras Movex aplicadas (TCP/UDP porta' $port 'e programa).'
             .into(),
     )
 }
+
+/// Verifica (sem UAC) se as regras Movex já existem no firewall do Windows.
+/// `netsh ... show rule` é leitura — não exige elevação. Se as regras existem,
+/// `netsh` retorna exit 0; se não, exit 1.
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_firewall_rules_present(port: u16) -> bool {
+    use std::process::Command;
+    let names = [
+        format!("Movex TCP {}", port),
+        format!("Movex UDP {}", port),
+        "Movex mDNS".to_string(),
+        "Movex App In".to_string(),
+        "Movex App Out".to_string(),
+    ];
+    for name in &names {
+        let out = Command::new("netsh")
+            .args(["advfirewall", "firewall", "show", "rule"])
+            .arg(format!("name={}", name))
+            .output();
+        match out {
+            Ok(o) if o.status.success() => continue,
+            _ => return false,
+        }
+    }
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub(crate) fn windows_firewall_rules_present(_port: u16) -> bool { true }

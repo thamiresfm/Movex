@@ -8,20 +8,20 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
     // Cancelar conexão anterior se existir
     state.cancel_connection().await;
 
-    // Windows: na primeira conexão, pedir UAC para regras no Firewall (senão o SO não "pergunta"
-    // e o servidor pode ficar inacessível na LAN). Executa uma vez por instalação/config.
+    // Windows: verificar se as regras de firewall do Movex existem; se não, pedir UAC.
+    // Em vez de confiar num flag persistido (que mantinha-se `true` mesmo depois do
+    // utilizador remover as regras manualmente / reinstalar Windows / etc.),
+    // consultamos o `netsh advfirewall firewall show rule` directamente. Isso é uma
+    // leitura — não exige elevação — e dá-nos a verdade do sistema em cada Connect.
     #[cfg(target_os = "windows")]
     {
-        let (port, need_fw, role_hint) = {
+        let (port, role_hint) = {
             let s = state.settings.lock().await;
-            (
-                s.port,
-                !s.windows_firewall_prompt_done,
-                s.role.clone(),
-            )
+            (s.port, s.role.clone())
         };
+        let need_fw = !crate::permissions::windows_firewall_rules_present(port);
         if need_fw {
-            tracing::info!("Windows: a pedir permissão de firewall (UAC) antes da primeira conexão");
+            tracing::info!("Windows: regras Movex em falta — a pedir permissão (UAC).");
             if let Some(app) = state.app_handle.lock().await.as_ref() {
                 let body = match role_hint {
                     Role::Server => "Vai abrir o pedido do Windows (UAC). Aceite «Sim» para permitir o Movex na porta da rede (servidor).",
@@ -40,6 +40,8 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
                     tracing::warn!("Erro ao gravar windows_firewall_prompt_done: {e}");
                 }
             }
+        } else {
+            tracing::debug!("Windows: regras Movex já presentes — sem pedido de UAC.");
         }
     }
 

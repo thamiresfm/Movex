@@ -202,6 +202,7 @@ pub fn run() {
             ipc::update::check_for_update,
             ipc::update::install_update,
             ipc::system::set_screen_border,
+            ipc::system::diagnose_connection,
             permissions::open_system_settings,
             permissions::get_platform_kind,
             permissions::windows_apply_firewall_rules_for_movex,
