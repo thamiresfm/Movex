@@ -80,6 +80,15 @@ static WIN_CENTER_Y: AtomicI32 = AtomicI32::new(0);
 static WIN_PREV_X: AtomicI32 = AtomicI32::new(0);
 static WIN_PREV_Y: AtomicI32 = AtomicI32::new(0);
 
+/// Posição do cursor IMEDIATAMENTE ANTES do `lock_cursor` (= antes de o utilizador
+/// cruzar a borda). Usado por `unlock_cursor` para restaurar o cursor ao ponto
+/// onde o utilizador "deixou" Windows quando cruzou para o peer — evita o
+/// sintoma "mouse agarrando" em que o cursor reaparece no centro do ecrã,
+/// muito longe de onde o utilizador esperava.
+static WIN_PRE_LOCK_X: AtomicI32 = AtomicI32::new(0);
+static WIN_PRE_LOCK_Y: AtomicI32 = AtomicI32::new(0);
+static WIN_PRE_LOCK_VALID: AtomicBool = AtomicBool::new(false);
+
 /// Posição virtual do cursor no ecrã remoto (bits de f32 guardados em AtomicU32).
 static WIN_VIRT_X_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static WIN_VIRT_Y_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -366,6 +375,20 @@ impl InputCapture for WindowsCapture {
     /// 2. Actualizar `WIN_PREV_{X,Y} = center` ANTES do warp para que o evento
     ///    sintético gerado pelo SetCursorPos tenha `delta = 0` → descartado.
     fn lock_cursor(&self, entry_x: f32, entry_y: f32) {
+        // Capturar a posição actual ANTES de qualquer warp — assim o
+        // unlock_cursor pode trazer o cursor de volta para onde o
+        // utilizador estava quando cruzou a borda.
+        unsafe {
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+            let mut pt = POINT::default();
+            if GetCursorPos(&mut pt).is_ok() {
+                WIN_PRE_LOCK_X.store(pt.x, Ordering::Release);
+                WIN_PRE_LOCK_Y.store(pt.y, Ordering::Release);
+                WIN_PRE_LOCK_VALID.store(true, Ordering::Release);
+            }
+        }
+
         let (left, top, w, h) = primary_display_bounds();
         let cx = left + w as i32 / 2;
         let cy = top  + h as i32 / 2;
@@ -398,7 +421,40 @@ impl InputCapture for WindowsCapture {
 
     fn unlock_cursor(&self) {
         WIN_CURSOR_LOCKED.store(false, Ordering::Release);
-        info!("WindowsCapture: unlocked");
+
+        // Restaurar cursor para a posição pré-lock, mas afastado das bordas em
+        // 80 px para evitar que um movimento ligeiro re-dispare a travessia
+        // imediata. Sem isto o cursor reaparece no centro do ecrã, o que parece
+        // "agarrar" porque o utilizador continua a mexer o mouse esperando que
+        // o cursor saia de onde estava antes do cruzamento.
+        if WIN_PRE_LOCK_VALID.swap(false, Ordering::AcqRel) {
+            let (left, top, w, h) = primary_display_bounds();
+            let pre_x = WIN_PRE_LOCK_X.load(Ordering::Acquire);
+            let pre_y = WIN_PRE_LOCK_Y.load(Ordering::Acquire);
+            const MARGIN: i32 = 80;
+            let max_x = left + w as i32 - MARGIN;
+            let max_y = top  + h as i32 - MARGIN;
+            let min_x = left + MARGIN;
+            let min_y = top  + MARGIN;
+            let x = pre_x.clamp(min_x, max_x);
+            let y = pre_y.clamp(min_y, max_y);
+
+            // Reset prev_pos para a posição restaurada — evita que a próxima
+            // iteração calcule um delta enorme e o filtre como "bogus".
+            WIN_PREV_X.store(x, Ordering::Release);
+            WIN_PREV_Y.store(y, Ordering::Release);
+
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+                let _ = SetCursorPos(x, y);
+            }
+            info!(
+                "WindowsCapture: unlocked → restaurado para ({},{}) (pre-lock + margem)",
+                x, y
+            );
+        } else {
+            info!("WindowsCapture: unlocked (sem pre-lock guardado)");
+        }
     }
 }
 

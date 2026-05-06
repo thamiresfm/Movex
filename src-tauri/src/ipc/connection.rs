@@ -19,7 +19,7 @@ pub async fn start_connection(state: State<'_, SharedState>) -> Result<(), Strin
             let s = state.settings.lock().await;
             (s.port, s.role.clone())
         };
-        let need_fw = !crate::permissions::windows_firewall_rules_present(port);
+        let need_fw = !crate::permissions::windows_firewall_rules_present_async(port).await;
         if need_fw {
             tracing::info!("Windows: regras Movex em falta — a pedir permissão (UAC).");
             if let Some(app) = state.app_handle.lock().await.as_ref() {

@@ -35,6 +35,11 @@ pub struct MacOsCapture {
     running:  Arc<AtomicBool>,
     /// Posição virtual do cursor no ecrã remoto (0..1, convenção padrão 0=topo-esq).
     virt_pos: Arc<Mutex<(f32, f32)>>,
+    /// Posição do cursor IMEDIATAMENTE ANTES do `lock_cursor` (= antes de
+    /// cruzar a borda). Usado por `unlock_cursor` para restaurar o cursor
+    /// onde o utilizador o "deixou" — evita o sintoma "cursor reaparece no
+    /// centro do ecrã" que parece "preso/agarrando".
+    pre_lock: Arc<Mutex<Option<(f64, f64)>>>,
 }
 
 impl MacOsCapture {
@@ -45,6 +50,7 @@ impl MacOsCapture {
             prev_pos: Arc::new(Mutex::new((0.0, 0.0))),
             running:  Arc::new(AtomicBool::new(false)),
             virt_pos: Arc::new(Mutex::new((0.5, 0.5))),
+            pre_lock: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -329,6 +335,12 @@ impl InputCapture for MacOsCapture {
         let cx = b.origin.x + b.size.width  / 2.0;
         let cy = b.origin.y + b.size.height / 2.0;
 
+        // Capturar a posição actual do cursor ANTES do warp — o unlock_cursor
+        // vai restaurar o cursor para esta posição.
+        if let Ok((px, py)) = get_cursor_position() {
+            *self.pre_lock.lock().unwrap_or_else(|p| p.into_inner()) = Some((px, py));
+        }
+
         // unwrap_or_else: recupera o valor mesmo se outra thread sofreu panic com o lock.
         *self.center.lock().unwrap_or_else(|p| p.into_inner()) = (cx, cy);
         *self.prev_pos.lock().unwrap_or_else(|p| p.into_inner()) = (cx, cy);
@@ -347,7 +359,32 @@ impl InputCapture for MacOsCapture {
 
     fn unlock_cursor(&self) {
         *self.locked.lock().unwrap_or_else(|p| p.into_inner()) = false;
-        info!("MacOsCapture: unlocked");
+
+        // Restaurar cursor para a posição pré-lock, com margem de 80 px da
+        // borda — evita o "mouse agarrando" em que o cursor reaparece no
+        // centro depois do utilizador voltar do PC remoto.
+        let pre = self.pre_lock.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some((pre_x, pre_y)) = pre {
+            use core_graphics::display::CGDisplay;
+            let b = CGDisplay::main().bounds();
+            const MARGIN: f64 = 80.0;
+            let min_x = b.origin.x + MARGIN;
+            let min_y = b.origin.y + MARGIN;
+            let max_x = b.origin.x + b.size.width  - MARGIN;
+            let max_y = b.origin.y + b.size.height - MARGIN;
+            let x = pre_x.clamp(min_x, max_x);
+            let y = pre_y.clamp(min_y, max_y);
+            *self.prev_pos.lock().unwrap_or_else(|p| p.into_inner()) = (x, y);
+            let _ = CGDisplay::warp_mouse_cursor_position(
+                core_graphics::geometry::CGPoint { x, y }
+            );
+            info!(
+                "MacOsCapture: unlocked → restaurado para ({:.0},{:.0}) (pre-lock + margem)",
+                x, y
+            );
+        } else {
+            info!("MacOsCapture: unlocked (sem pre-lock guardado)");
+        }
     }
 }
 

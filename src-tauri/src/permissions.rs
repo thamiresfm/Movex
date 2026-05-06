@@ -214,31 +214,37 @@ Write-Host 'Regras Movex aplicadas (TCP/UDP porta' $port ', mDNS 5353, programa)
 }
 
 /// Verifica (sem UAC) se as regras Movex já existem no firewall do Windows.
-/// `netsh ... show rule` é leitura — não exige elevação. Se as regras existem,
+/// `netsh ... show rule` é leitura — não exige elevação. Se a regra existe,
 /// `netsh` retorna exit 0; se não, exit 1.
+///
+/// Verifica APENAS «Movex App In» — se essa existe, as outras 4 também (são
+/// criadas no mesmo script atómico). Reduz a chamada de 5 → 1 (~1.5s → ~300ms).
+///
+/// `Command::output` é bloqueante; chamamos a partir de tarefa síncrona ou
+/// dentro de `spawn_blocking` para não congelar a runtime do Tauri.
 #[cfg(target_os = "windows")]
-pub(crate) fn windows_firewall_rules_present(port: u16) -> bool {
+pub(crate) fn windows_firewall_rules_present(_port: u16) -> bool {
     use std::process::Command;
-    let names = [
-        format!("Movex TCP {}", port),
-        format!("Movex UDP {}", port),
-        "Movex mDNS".to_string(),
-        "Movex App In".to_string(),
-        "Movex App Out".to_string(),
-    ];
-    for name in &names {
-        let out = Command::new("netsh")
-            .args(["advfirewall", "firewall", "show", "rule"])
-            .arg(format!("name={}", name))
-            .output();
-        match out {
-            Ok(o) if o.status.success() => continue,
-            _ => return false,
-        }
-    }
-    true
+    let out = Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule", "name=Movex App In"])
+        .output();
+    matches!(out, Ok(o) if o.status.success())
+}
+
+/// Versão async — wrapping em `spawn_blocking` para não bloquear a runtime
+/// do Tauri durante o subprocesso `netsh` (pode demorar 100–500 ms).
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+pub(crate) async fn windows_firewall_rules_present_async(port: u16) -> bool {
+    tokio::task::spawn_blocking(move || windows_firewall_rules_present(port))
+        .await
+        .unwrap_or(false)
 }
 
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 pub(crate) fn windows_firewall_rules_present(_port: u16) -> bool { true }
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub(crate) async fn windows_firewall_rules_present_async(_port: u16) -> bool { true }
