@@ -123,15 +123,66 @@ jobs:
       - name: Instalar dependências npm
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-      - name: Build e upload macOS
-        uses: tauri-apps/tauri-action@v0
+
+      # Build apenas o .app (sem .dmg) — o .dmg será criado depois do
+      # re-codesign para incluir a assinatura estável.
+      - name: Build .app universal (sem DMG)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          releaseId: ${{ needs.release.outputs.release_id }}
-          args: --target universal-apple-darwin
+        run: |
+          npm install -g @tauri-apps/cli@^2
+          tauri build --target universal-apple-darwin --bundles app
+
+      # Re-assinar com identifier ESTÁVEL (com.movex.app). O linker do Rust
+      # gera identifier aleatório (movex-XXXXXXX) a cada build, e o TCC do
+      # macOS guarda permissões de Acessibilidade/Input Monitoring por
+      # CD hash desse identifier. Sem este passo o utilizador é forçado a
+      # remover e re-adicionar Movex em Privacidade & Segurança a cada
+      # release — Deskflow documenta o mesmo problema.
+      #
+      # `--options runtime` ativa hardened runtime; `--entitlements` aplica
+      # as flags get-task-allow/disable-library-validation/allow-jit que o
+      # CGEventTap precisa.
+      - name: Re-assinar .app com identifier estável + hardened runtime
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle/macos/Movex.app"
+          ls -la "$BUNDLE"
+          codesign --force --deep --options runtime \
+            --entitlements src-tauri/entitlements.plist \
+            --sign - --identifier com.movex.app \
+            "$BUNDLE"
+          echo "--- assinatura final ---"
+          codesign -dvvv "$BUNDLE" 2>&1 | grep -E "Identifier|flags|Signature" | head -5
+
+      # Empacotar .dmg manualmente via hdiutil — não usamos o bundle do
+      # Tauri porque ele recompila o .app, perdendo a assinatura estável.
+      - name: Criar DMG manualmente (com .app re-assinado)
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle/macos/Movex.app"
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          cp -R "$BUNDLE" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
+          mkdir -p "$DMG_DIR"
+          DMG="$DMG_DIR/Movex_${VERSION}_universal.dmg"
+          hdiutil create -volname "Movex ${VERSION}" \
+            -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          ls -la "$DMG_DIR"
+
+      # Upload manual do .dmg ao Release já criado (pelo job `release`).
+      - name: Upload DMG ao Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/Movex_${VERSION}_universal.dmg"
+          gh release upload "v${VERSION}" "$DMG" --clobber
 
   build-windows:
     name: Build Windows (x64)

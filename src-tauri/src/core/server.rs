@@ -61,17 +61,40 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
             result = listener.accept() => {
                 match result {
                     Ok((tcp_stream, peer_addr)) => {
+                        // Substituir sessão stale por nova conexão.
+                        //
+                        // Antes rejeitávamos qualquer Connected/Connecting, mas
+                        // isso bloqueava reconexões legítimas após timeout TCP:
+                        // o read loop demora segundos para detectar o cliente
+                        // morto, e durante esse intervalo o estado fica
+                        // "Connected" mas a sessão não responde. Cliente
+                        // tentando reconectar era cuspido fora.
+                        //
+                        // Comportamento Barrier/Synergy: nova conexão sempre
+                        // ganha; pedimos disconnect gracioso ao peer antigo
+                        // e limpamos o estado antes de aceitar a nova.
                         {
-                            let status = state.connection_status.lock().await;
-                            if matches!(
-                                *status,
-                                ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting
-                            ) {
+                            let stale = {
+                                let status = state.connection_status.lock().await;
+                                matches!(
+                                    *status,
+                                    ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting
+                                )
+                            };
+                            if stale {
                                 warn!(
-                                    "Rejeitando nova conexão de {} — já há sessão em curso ou cliente ligado",
+                                    "Substituindo sessão stale por nova conexão de {}",
                                     peer_addr
                                 );
-                                continue;
+                                // Pedir disconnect ao peer antigo (best-effort)
+                                if let Some(tx) = state.message_tx.lock().await.as_ref() {
+                                    let _ = tx.try_send(crate::network::protocol::Message::Disconnect {
+                                        reason: "substituído por nova conexão".into(),
+                                    });
+                                }
+                                *state.message_tx.lock().await = None;
+                                *state.connection_status.lock().await = ConnectionStatus::Listening;
+                                crate::ipc::emit_status_to_main(&state).await;
                             }
                         }
 
