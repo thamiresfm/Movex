@@ -276,11 +276,26 @@ impl InputCapture for WindowsCapture {
                     if GetAsyncKeyState(VK_LWIN.0 as i32) < 0
                     || GetAsyncKeyState(VK_RWIN.0 as i32) < 0    { mods = Modifiers(mods.0 | Modifiers::META.0); }
 
+                    // Converter VK → HID. Sem mapa, descartar (não corromper o
+                    // outro lado com keycodes Windows-specific).
+                    let Some(hid) = crate::input::keycodes::vk_to_hid(data.vkCode) else {
+                        return CallNextHookEx(None, n_code, w_param, l_param);
+                    };
+
+                    // Suprimir o evento local quando o cursor está no remoto,
+                    // para não digitar nas duas máquinas. Em modo local
+                    // (cursor neste PC), continuamos a passar via CallNextHookEx.
+                    let suppress_local = WIN_CURSOR_LOCKED.load(Ordering::Acquire);
+
                     call_hook_cb(InputEvent::KeyEvent {
-                        keycode: data.vkCode,
+                        keycode: hid,
                         pressed,
                         modifiers: mods,
                     });
+
+                    if suppress_local {
+                        return LRESULT(1);
+                    }
                 }
                 CallNextHookEx(None, n_code, w_param, l_param)
             }
@@ -461,6 +476,12 @@ impl InputInjector for WindowsInjector {
                 }]
             }
             InputEvent::KeyEvent { keycode, pressed, modifiers } => {
+                // Converter HID → VK. Sem mapa, descartar para não enviar
+                // SendInput com VK arbitrário (poderia disparar tecla aleatória).
+                let Some(vk_main) = crate::input::keycodes::hid_to_vk(keycode) else {
+                    return Ok(());
+                };
+
                 let mut inputs = vec![];
 
                 let mod_keys = [
@@ -478,7 +499,7 @@ impl InputInjector for WindowsInjector {
                     }
                 }
 
-                inputs.push(make_key_input(keycode as u16, !pressed));
+                inputs.push(make_key_input(vk_main, !pressed));
 
                 if !pressed {
                     for (m, vk) in &mod_keys {

@@ -184,6 +184,28 @@ impl InputCapture for MacOsCapture {
                                 callback(InputEvent::MouseScroll { dx, dy });
                                 return None;
                             }
+                            // Teclado encaminhado para o PC remoto e SUPRIMIDO localmente
+                            // (returning None) para que a tecla não seja digitada nas duas
+                            // máquinas em simultâneo. Sem isto, o utilizador pressionaria
+                            // 'a' no teclado físico e via 'aa' aparecer (uma local + uma
+                            // remota injetada de volta via TCP).
+                            CGEventType::KeyDown | CGEventType::KeyUp => {
+                                use core_graphics::event::{EventField, CGEventFlags};
+                                let mac_kc = event.get_integer_value_field(
+                                    EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                                let Some(hid) = crate::input::keycodes::mac_to_hid(mac_kc) else {
+                                    return None;
+                                };
+                                let flags = event.get_flags();
+                                let mut mods = Modifiers::NONE;
+                                if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
+                                let pressed = matches!(event_type, CGEventType::KeyDown);
+                                callback(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods });
+                                return None;
+                            }
                             _ => {}
                         }
                     }
@@ -219,8 +241,10 @@ impl InputCapture for MacOsCapture {
                         }
                         CGEventType::KeyDown | CGEventType::KeyUp => {
                             use core_graphics::event::{EventField, CGEventFlags};
-                            let keycode = event.get_integer_value_field(
+                            let mac_kc = event.get_integer_value_field(
                                 EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                            // Converter mac → HID. Sem mapa, descartar.
+                            let hid = crate::input::keycodes::mac_to_hid(mac_kc)?;
                             let flags = event.get_flags();
                             let mut mods = Modifiers::NONE;
                             if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
@@ -228,7 +252,7 @@ impl InputCapture for MacOsCapture {
                             if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
                             if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
                             let pressed = matches!(event_type, CGEventType::KeyDown);
-                            Some(InputEvent::KeyEvent { keycode, pressed, modifiers: mods })
+                            Some(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods })
                         }
                         _ => None,
                     };
@@ -382,7 +406,12 @@ impl InputInjector for MacOsInjector {
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
             }
             InputEvent::KeyEvent { keycode, pressed, modifiers } => {
-                let ev = CGEvent::new_keyboard_event(source, keycode as u16, pressed)
+                // Converter HID → keycode macOS. Sem mapa, descartar para não
+                // chamar CGEvent com keycode arbitrário (poderia digitar lixo).
+                let Some(mac_kc) = crate::input::keycodes::hid_to_mac(keycode) else {
+                    return Ok(());
+                };
+                let ev = CGEvent::new_keyboard_event(source, mac_kc, pressed)
                     .map_err(|_| "Falha KeyEvent".to_string())?;
                 let mut flags = CGEventFlags::empty();
                 if modifiers.contains(Modifiers::SHIFT) { flags |= CGEventFlags::CGEventFlagShift; }
