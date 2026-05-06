@@ -110,10 +110,11 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: actions/cache@v4
         with:
+          # Workspace Cargo: target/ está na raiz do repo, não em src-tauri/.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
+            target
           key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: macos-cargo-
       - uses: actions/setup-node@v4
@@ -147,7 +148,7 @@ jobs:
       - name: Re-assinar .app com identifier estável + hardened runtime
         run: |
           set -euo pipefail
-          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle/macos/Movex.app"
+          BUNDLE="target/universal-apple-darwin/release/bundle/macos/Movex.app"
           ls -la "$BUNDLE"
           codesign --force --deep --options runtime \
             --entitlements src-tauri/entitlements.plist \
@@ -162,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
-          BUNDLE="src-tauri/target/universal-apple-darwin/release/bundle/macos/Movex.app"
+          BUNDLE="target/universal-apple-darwin/release/bundle/macos/Movex.app"
           STAGE="$RUNNER_TEMP/dmg-stage"
           rm -rf "$STAGE" && mkdir -p "$STAGE"
           cp -R "$BUNDLE" "$STAGE/"
