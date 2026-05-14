@@ -63,16 +63,18 @@ mod tests {
 
     #[test]
     fn verify_hmac_correct() {
-        let psk = "mysecretkey";
+        let psk_hex = hex::encode("mysecretkey");
         let nonce = "randomnonce123";
-        let hmac = compute_hmac(psk, nonce).unwrap();
-        assert!(verify_hmac(psk, nonce, &hmac));
+        let hmac = compute_hmac(&psk_hex, nonce).unwrap();
+        assert!(verify_hmac(&psk_hex, nonce, &hmac));
     }
 
     #[test]
     fn verify_hmac_wrong_key() {
-        let hmac = compute_hmac("correct_psk", "nonce");
-        assert!(!verify_hmac("wrong_psk", "nonce", &hmac));
+        let correct = hex::encode("correct_psk");
+        let wrong   = hex::encode("wrong_psk");
+        let hmac = compute_hmac(&correct, "nonce").unwrap();
+        assert!(!verify_hmac(&wrong, "nonce", &hmac));
     }
 
     #[test]
