@@ -199,9 +199,7 @@ impl InputCapture for MacOsCapture {
                                 use core_graphics::event::{EventField, CGEventFlags};
                                 let mac_kc = event.get_integer_value_field(
                                     EventField::KEYBOARD_EVENT_KEYCODE) as u32;
-                                let Some(hid) = crate::input::keycodes::mac_to_hid(mac_kc) else {
-                                    return None;
-                                };
+                                let hid = crate::input::keycodes::mac_to_hid(mac_kc)?;
                                 let flags = event.get_flags();
                                 let mut mods = Modifiers::NONE;
                                 if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
