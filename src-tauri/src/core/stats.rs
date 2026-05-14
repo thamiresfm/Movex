@@ -15,6 +15,7 @@ impl SessionStats {
     pub fn add_sent(&self, bytes: u64)     { self.bytes_sent.fetch_add(bytes, Ordering::Relaxed); }
     pub fn add_received(&self, bytes: u64) { self.bytes_received.fetch_add(bytes, Ordering::Relaxed); }
     pub fn inc_event_sent(&self)           { self.events_sent.fetch_add(1, Ordering::Relaxed); }
+    #[allow(dead_code)]
     pub fn inc_event_received(&self)       { self.events_received.fetch_add(1, Ordering::Relaxed); }
     pub fn inc_file_sent(&self)            { self.files_sent.fetch_add(1, Ordering::Relaxed); }
     pub fn inc_file_received(&self)        { self.files_received.fetch_add(1, Ordering::Relaxed); }
