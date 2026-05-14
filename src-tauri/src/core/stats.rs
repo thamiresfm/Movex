@@ -11,7 +11,6 @@ pub struct SessionStats {
     pub files_received: AtomicU64,
 }
 
-#[allow(dead_code)]
 impl SessionStats {
     pub fn add_sent(&self, bytes: u64)     { self.bytes_sent.fetch_add(bytes, Ordering::Relaxed); }
     pub fn add_received(&self, bytes: u64) { self.bytes_received.fetch_add(bytes, Ordering::Relaxed); }
@@ -72,13 +71,3 @@ pub fn get_primary_screen_size() -> (u32, u32) {
     (1920, 1080)
 }
 
-#[allow(dead_code)]
-pub fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-    if bytes >= GB      { format!("{:.1} GB", bytes as f64 / GB as f64) }
-    else if bytes >= MB { format!("{:.1} MB", bytes as f64 / MB as f64) }
-    else if bytes >= KB { format!("{:.0} KB", bytes as f64 / KB as f64) }
-    else                { format!("{} B", bytes) }
-}

@@ -210,15 +210,16 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
     }
 }
 
-/// Envia uma mensagem por qualquer stream assíncrono que implemente `AsyncWriteExt`
+/// Envia uma mensagem por qualquer stream assíncrono que implemente `AsyncWriteExt`.
+/// Retorna o número de bytes escritos (frame completo: magic + length + payload).
 pub async fn send_message<W: AsyncWriteExt + Unpin>(
     stream: &mut W,
     msg: &Message,
-) -> Result<(), TransportError> {
+) -> Result<usize, TransportError> {
     let bytes = msg.encode()?;
     stream.write_all(&bytes).await?;
     debug!("Mensagem enviada: {} bytes", bytes.len());
-    Ok(())
+    Ok(bytes.len())
 }
 
 /// Recebe uma mensagem de qualquer stream assíncrono que implemente `AsyncReadExt`
@@ -227,6 +228,13 @@ pub async fn send_message<W: AsyncWriteExt + Unpin>(
 pub async fn recv_message<R: AsyncReadExt + Unpin>(
     stream: &mut R,
 ) -> Result<Message, TransportError> {
+    recv_message_counted(stream).await.map(|(msg, _)| msg)
+}
+
+/// Como `recv_message`, mas também retorna o total de bytes lidos (8 de cabeçalho + payload).
+pub async fn recv_message_counted<R: AsyncReadExt + Unpin>(
+    stream: &mut R,
+) -> Result<(Message, usize), TransportError> {
     let mut magic = [0u8; 4];
     match stream.read_exact(&mut magic).await {
         Ok(_) => {}
@@ -254,7 +262,7 @@ pub async fn recv_message<R: AsyncReadExt + Unpin>(
 
     let msg = Message::decode(&payload)?;
     debug!("Mensagem recebida: {} bytes", len);
-    Ok(msg)
+    Ok((msg, 8 + len))
 }
 
 #[cfg(test)]

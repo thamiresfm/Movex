@@ -100,6 +100,9 @@ pub fn normalize_point_against_display_rect(
 static DESKTOP_BBOX_CACHE: OnceLock<(i32, i32, u32, u32)> = OnceLock::new();
 
 /// Origem `(min_x, min_y)` e tamanho `(width, height)` do rect que engloba todos os monitores.
+///
+/// Limitação conhecida: o cache não é invalidado em hotplug de monitores. Reiniciar a
+/// aplicação ou reconectar para atualizar o layout após adicionar/remover monitores.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[inline]
 pub fn desktop_bounding_box_cached() -> (i32, i32, u32, u32) {
@@ -181,19 +184,23 @@ fn detect_monitors_windows() -> MultiMonitorLayout {
         _rect: *mut RECT,
         data: LPARAM,
     ) -> BOOL {
+        use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
         let monitors = &mut *(data.0 as *mut Vec<Monitor>);
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         if GetMonitorInfoW(hmon, &mut info.monitorInfo as *mut MONITORINFO).as_bool() {
             let r = info.monitorInfo.rcMonitor;
             let is_primary = info.monitorInfo.dwFlags & 1 != 0;
+            let mut dpi_x: u32 = 96;
+            let mut dpi_y: u32 = 96;
+            let _ = GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
             monitors.push(Monitor {
                 id: monitors.len() as u32,
                 x: r.left,
                 y: r.top,
                 width: (r.right - r.left) as u32,
                 height: (r.bottom - r.top) as u32,
-                scale_factor: 1.0,
+                scale_factor: dpi_x as f32 / 96.0,
                 is_primary,
             });
         }

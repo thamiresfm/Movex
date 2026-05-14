@@ -80,8 +80,6 @@ pub struct Settings {
     pub lock_key: String,
     pub clipboard_sync_enabled: bool,
     pub recent_peers: Vec<RecentPeer>,
-    /// Não persiste como `true` — sempre resetado no load
-    pub lock_mode: bool,
     /// Fingerprint SHA-256 (hex) do certificado TLS do servidor — TOFU
     /// None = primeira conexão (aceita qualquer cert e armazena)
     /// Some(fp) = rejeita se o cert apresentado divergir
@@ -113,7 +111,6 @@ impl Default for Settings {
             lock_key: "ctrl+alt+l".to_string(),
             clipboard_sync_enabled: true,
             recent_peers: vec![],
-            lock_mode: false,
             server_cert_fingerprint: None,
             windows_firewall_prompt_done: false,
         }
@@ -159,7 +156,6 @@ impl Settings {
                             s.notifications_enabled = true;
                             s.lock_key = "ctrl+alt+l".to_string();
                             s.recent_peers = vec![];
-                            s.lock_mode = false;
                         }
                         if s.schema_version < 3 {
                             s.schema_version = 3;
@@ -183,7 +179,6 @@ impl Settings {
                             s.windows_firewall_prompt_done = false;
                             let _ = s.save();
                         }
-                        s.lock_mode = false;
                         info!("Configurações carregadas de {:?}", path);
                         return s;
                     }
@@ -202,13 +197,14 @@ impl Settings {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let mut to_save = self.clone();
-        to_save.lock_mode = false;
-        let json = serde_json::to_string_pretty(&to_save).map_err(|e| e.to_string())?;
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         // Escrever em arquivo temporário e renomear atomicamente para evitar corrupção
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.to_string());
+        }
         Ok(())
     }
 

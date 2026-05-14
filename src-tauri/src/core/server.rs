@@ -7,7 +7,8 @@ use tracing::{error, info, warn};
 use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::transport::{
-    create_tls_acceptor, load_or_generate_server_cert, recv_message, send_message,
+    create_tls_acceptor, load_or_generate_server_cert, recv_message, recv_message_counted,
+    send_message,
 };
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
@@ -86,13 +87,16 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                                     "Substituindo sessão stale por nova conexão de {}",
                                     peer_addr
                                 );
-                                // Pedir disconnect ao peer antigo (best-effort)
-                                if let Some(tx) = state.message_tx.lock().await.as_ref() {
-                                    let _ = tx.try_send(crate::network::protocol::Message::Disconnect {
-                                        reason: "substituído por nova conexão".into(),
-                                    });
+                                // Pedir disconnect ao peer antigo (best-effort) e limpar canal na mesma aquisição
+                                {
+                                    let mut tx = state.message_tx.lock().await;
+                                    if let Some(t) = tx.as_ref() {
+                                        let _ = t.try_send(crate::network::protocol::Message::Disconnect {
+                                            reason: "substituído por nova conexão".into(),
+                                        });
+                                    }
+                                    *tx = None;
                                 }
-                                *state.message_tx.lock().await = None;
                                 *state.connection_status.lock().await = ConnectionStatus::Listening;
                                 crate::ipc::emit_status_to_main(&state).await;
                             }
@@ -160,8 +164,10 @@ async fn handle_client<S>(
         }
     };
 
+    let own_psk = { state.settings.lock().await.psk_hex.clone() };
+
     let peer_hostname = match hello {
-        Message::Hello { version, hostname, hmac: _ } => {
+        Message::Hello { version, hostname, hmac } => {
             if version != PROTOCOL_VERSION {
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
@@ -169,7 +175,14 @@ async fn handle_client<S>(
                 server_resume_listening(&state).await;
                 return;
             }
-            // PSK não é mais validada: TLS na rede local.
+            if !crate::core::auth::verify_hmac(&own_psk, &server_nonce, &hmac) {
+                warn!("HMAC inválido de {} — chave de segurança não coincide", peer_addr);
+                let _ = send_message(&mut stream, &Message::HelloReject {
+                    reason: "Chave de segurança (PSK) não coincide. Certifique-se que ambos os PCs têm a mesma chave nas Configurações.".into(),
+                }).await;
+                server_resume_listening(&state).await;
+                return;
+            }
             hostname
         }
         _ => {
@@ -366,9 +379,12 @@ async fn handle_client<S>(
             }
 
             Some(msg) = msg_rx.recv() => {
-                if let Err(e) = send_message(&mut stream, &msg).await {
-                    warn!("Erro ao enviar mensagem para {}: {}", peer_addr, e);
-                    break;
+                match send_message(&mut stream, &msg).await {
+                    Ok(n) => { state.stats.add_sent(n as u64); }
+                    Err(e) => {
+                        warn!("Erro ao enviar mensagem para {}: {}", peer_addr, e);
+                        break;
+                    }
                 }
             }
 
@@ -379,9 +395,17 @@ async fn handle_client<S>(
                 }
             }
 
-            result = recv_message(&mut stream) => {
-                match result {
-                    Ok(Message::Pong) => {
+            result = recv_message_counted(&mut stream) => {
+                let (msg, recv_bytes) = match result {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        warn!("Erro ao receber de {}: {}", peer_addr, e);
+                        break;
+                    }
+                };
+                state.stats.add_received(recv_bytes as u64);
+                match msg {
+                    Message::Pong => {
                         if let Some(sent) = ping_sent_at.take() {
                             let rtt_ms = sent.elapsed().as_millis() as u32;
                             let mut status = state.connection_status.lock().await;
@@ -392,37 +416,37 @@ async fn handle_client<S>(
                             crate::ipc::emit_status_to_main(&state).await;
                         }
                     }
-                    Ok(Message::LeaveScreen) => {
+                    Message::LeaveScreen => {
                         capture.unlock_cursor();
                         state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
                         let mut active = state.active_screen.lock().await;
                         *active = ActiveScreen::Local;
                     }
-                    Ok(Message::Disconnect { reason }) => {
+                    Message::Disconnect { reason } => {
                         info!("Cliente desconectou: {}", reason);
                         break;
                     }
-                    Ok(Message::Ping) => {
+                    Message::Ping => {
                         let _ = send_message(&mut stream, &Message::Pong).await;
                     }
-                    Ok(ref msg @ Message::ClipboardData { .. }) => {
+                    ref msg @ Message::ClipboardData { .. } => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
                     }
-                    Ok(Message::FileStart { id, name, size }) => {
+                    Message::FileStart { id, name, size } => {
                         if let Some(ref mut recv) = file_receiver {
                             recv.on_file_start(id, name, size).await.unwrap_or_else(|e| {
                                 warn!("FileStart error: {}", e);
                             });
                         }
                     }
-                    Ok(Message::FileChunk { id, seq, data }) => {
+                    Message::FileChunk { id, seq, data } => {
                         if let Some(ref mut recv) = file_receiver {
                             recv.on_file_chunk(id, seq, data).await.unwrap_or_else(|e| {
                                 warn!("FileChunk error: {}", e);
                             });
                         }
                     }
-                    Ok(Message::FileEnd { id, checksum }) => {
+                    Message::FileEnd { id, checksum } => {
                         if let Some(ref mut recv) = file_receiver {
                             match recv.on_file_end(id, checksum).await {
                                 Ok((name, _path)) => {
@@ -440,11 +464,7 @@ async fn handle_client<S>(
                             }
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("Erro ao receber de {}: {}", peer_addr, e);
-                        break;
-                    }
+                    _ => {}
                 }
             }
         }

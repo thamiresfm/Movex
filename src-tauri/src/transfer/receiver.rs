@@ -10,6 +10,7 @@ struct Transfer {
     name: String,
     hasher: Sha256,
     received_bytes: u64,
+    expected_seq: u32,
 }
 
 pub struct FileReceiver {
@@ -43,16 +44,23 @@ impl FileReceiver {
         let name = safe_name;
         self.transfers.insert(
             id,
-            Transfer { file, name, hasher: Sha256::new(), received_bytes: 0 },
+            Transfer { file, name, hasher: Sha256::new(), received_bytes: 0, expected_seq: 0 },
         );
         Ok(())
     }
 
-    pub async fn on_file_chunk(&mut self, id: u32, _seq: u32, data: Vec<u8>) -> Result<(), String> {
+    pub async fn on_file_chunk(&mut self, id: u32, seq: u32, data: Vec<u8>) -> Result<(), String> {
         let t = self
             .transfers
             .get_mut(&id)
             .ok_or_else(|| format!("Transferência {} não encontrada", id))?;
+        if seq != t.expected_seq {
+            return Err(format!(
+                "Chunk fora de ordem para id={}: esperado seq={}, recebido seq={}",
+                id, t.expected_seq, seq
+            ));
+        }
+        t.expected_seq += 1;
         t.hasher.update(&data);
         t.file.write_all(&data).await.map_err(|e| e.to_string())?;
         t.received_bytes += data.len() as u64;
@@ -86,7 +94,10 @@ impl FileReceiver {
 
         let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
         let dest = self.unique_path(&self.downloads_dir.join(&t.name));
-        tokio::fs::rename(&tmp, &dest).await.map_err(|e| e.to_string())?;
+        if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(format!("Falha ao mover arquivo para destino: {}", e));
+        }
         info!("Arquivo '{}' recebido → {:?}", t.name, dest);
         Ok((t.name, dest))
     }

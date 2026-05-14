@@ -10,7 +10,7 @@ use crate::input::events::InputEvent;
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
-use crate::network::transport::{create_tls_connector, recv_message, send_message};
+use crate::network::transport::{create_tls_connector, recv_message, recv_message_counted, send_message};
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
 
@@ -159,7 +159,17 @@ where
         Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); return Err(()); }
     };
 
-    let hmac = crate::core::auth::compute_hmac(psk_hex, &challenge);
+    let hmac = match crate::core::auth::compute_hmac(psk_hex, &challenge) {
+        Ok(h) => h,
+        Err(e) => {
+            warn!("PSK inválida — não é possível calcular HMAC: {}", e);
+            state.user_visible_connection_error(
+                "Movex — Chave de segurança inválida",
+                "A chave de segurança (PSK) configurada não é hexadecimal válida. Regenere a chave nas Configurações.",
+            ).await;
+            return Err(());
+        }
+    };
     if let Err(e) = send_message(stream, &Message::Hello {
         version: PROTOCOL_VERSION,
         hostname: screen_name.to_string(),
@@ -502,9 +512,12 @@ async fn run_session<S>(
             }
 
             Some(msg) = msg_rx.recv() => {
-                if let Err(e) = send_message(stream, &msg).await {
-                    warn!("Erro ao enviar para servidor: {}", e);
-                    break;
+                match send_message(stream, &msg).await {
+                    Ok(n) => { state.stats.add_sent(n as u64); }
+                    Err(e) => {
+                        warn!("Erro ao enviar para servidor: {}", e);
+                        break;
+                    }
                 }
             }
 
@@ -537,9 +550,17 @@ async fn run_session<S>(
                 }
             }
 
-            result = recv_message(stream) => {
-                match result {
-            Ok(Message::EnterScreen) => {
+            result = recv_message_counted(stream) => {
+                let (msg, recv_bytes) = match result {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        warn!("Erro na sessão: {}", e);
+                        break;
+                    }
+                };
+                state.stats.add_received(recv_bytes as u64);
+                match msg {
+                    Message::EnterScreen => {
                         // Inicializar como `true` para suprimir o LeaveScreen imediato:
                         // o cursor chega na borda de entrada (ex: x=0 para Right), que já
                         // é a strip de retorno. Se deixarmos `false`, o primeiro MouseMove
@@ -555,8 +576,8 @@ async fn run_session<S>(
                         }
                         info!("Cursor entrou nesta máquina (modo remoto activado)");
                         crate::ipc::emit_status_to_main(&state).await;
-            }
-            Ok(Message::LeaveScreen) => {
+                    }
+                    Message::LeaveScreen => {
                         state.active_screen_remote.store(false, Ordering::Release);
                         {
                             let mut active = state.active_screen.lock().await;
@@ -564,8 +585,8 @@ async fn run_session<S>(
                         }
                         info!("Cursor voltou a esta máquina (modo local)");
                         crate::ipc::emit_status_to_main(&state).await;
-            }
-                    Ok(Message::Input(event)) => {
+                    }
+                    Message::Input(event) => {
                         if !state.active_screen_remote.load(Ordering::Acquire) {
                             prev_in_return_strip = false;
                             client_return_peer_pos = None;
@@ -631,7 +652,7 @@ async fn run_session<S>(
                         }
                         inject_event(event);
                     }
-                    Ok(ref msg @ Message::ClipboardData { .. }) => {
+                    ref msg @ Message::ClipboardData { .. } => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
                         // Atualizar cache com hash do conteúdo recebido para evitar reenvio
                         // imediato (dados binários como PNG não são comparáveis por texto)
@@ -640,17 +661,17 @@ async fn run_session<S>(
                             last_clipboard = Some(format!("{}:{}", mime.split(';').next().unwrap_or(mime), hash));
                         }
                     }
-                    Ok(Message::FileStart { id, name, size }) => {
+                    Message::FileStart { id, name, size } => {
                         if let Some(ref mut recv) = file_receiver {
                             recv.on_file_start(id, name, size).await.unwrap_or_else(|e| warn!("FileStart: {}", e));
                         }
                     }
-                    Ok(Message::FileChunk { id, seq, data }) => {
+                    Message::FileChunk { id, seq, data } => {
                         if let Some(ref mut recv) = file_receiver {
                             recv.on_file_chunk(id, seq, data).await.unwrap_or_else(|e| warn!("FileChunk: {}", e));
                         }
                     }
-                    Ok(Message::FileEnd { id, checksum }) => {
+                    Message::FileEnd { id, checksum } => {
                         if let Some(ref mut recv) = file_receiver {
                             match recv.on_file_end(id, checksum).await {
                                 Ok((name, path)) => info!("Arquivo recebido: '{}' → {:?}", name, path),
@@ -661,13 +682,13 @@ async fn run_session<S>(
                             }
                         }
                     }
-                    Ok(Message::FileRetry { id }) => {
+                    Message::FileRetry { id } => {
                         warn!("Peer solicitou reenvio do arquivo id={}", id);
                     }
-            Ok(Message::Ping) => {
-                let _ = send_message(stream, &Message::Pong).await;
-            }
-                    Ok(Message::Pong) => {
+                    Message::Ping => {
+                        let _ = send_message(stream, &Message::Pong).await;
+                    }
+                    Message::Pong => {
                         if let Some(sent) = ping_sent_at.take() {
                             let rtt = sent.elapsed().as_millis() as u32;
                             let mut status = state.connection_status.lock().await;
@@ -677,18 +698,14 @@ async fn run_session<S>(
                             drop(status);
                             crate::ipc::emit_status_to_main(&state).await;
                         }
+                    }
+                    Message::Disconnect { reason } => {
+                        info!("Servidor desconectou: {}", reason);
+                        break;
+                    }
+                    _ => {}
+                }
             }
-            Ok(Message::Disconnect { reason }) => {
-                info!("Servidor desconectou: {}", reason);
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                warn!("Erro na sessão: {}", e);
-                break;
-            }
-        }
-    }
         }
     }
 

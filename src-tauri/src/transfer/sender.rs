@@ -6,7 +6,6 @@ use tracing::info;
 
 use crate::network::protocol::{Message, FILE_CHUNK_SIZE};
 
-#[allow(dead_code)]
 pub async fn send_file<W>(
     stream: &mut W,
     path: &Path,

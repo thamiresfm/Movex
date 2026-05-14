@@ -134,16 +134,20 @@ pub async fn switch_role(state: State<'_, SharedState>, role: String) -> Result<
     }
 
     // Atualizar papel
+    let role_enum = match role.as_str() {
+        "server" => Role::Server,
+        "client" => Role::Client,
+        other => return Err(format!("papel inválido: '{}'", other)),
+    };
     {
         let mut s = state.settings.lock().await;
-        s.role = if role == "server" { Role::Server } else { Role::Client };
+        s.role = role_enum.clone();
         s.save()?;
     }
 
     // Relançar com o novo papel
     let cancel = state.new_cancel_token().await;
     let state_clone = state.inner().clone();
-    let role_enum = if role == "server" { Role::Server } else { Role::Client };
     match role_enum {
         Role::Server => {
             tokio::spawn(async move {
