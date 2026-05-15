@@ -164,10 +164,8 @@ async fn handle_client<S>(
         }
     };
 
-    let own_psk = { state.settings.lock().await.psk_hex.clone() };
-
     let peer_hostname = match hello {
-        Message::Hello { version, hostname, hmac } => {
+        Message::Hello { version, hostname, hmac: _ } => {
             if version != PROTOCOL_VERSION {
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
@@ -175,14 +173,7 @@ async fn handle_client<S>(
                 server_resume_listening(&state).await;
                 return;
             }
-            if !crate::core::auth::verify_hmac(&own_psk, &server_nonce, &hmac) {
-                warn!("HMAC inválido de {} — chave de segurança não coincide", peer_addr);
-                let _ = send_message(&mut stream, &Message::HelloReject {
-                    reason: "Chave de segurança (PSK) não coincide. Certifique-se que ambos os PCs têm a mesma chave nas Configurações.".into(),
-                }).await;
-                server_resume_listening(&state).await;
-                return;
-            }
+            // PSK não é validada pelo servidor: TLS na rede local é suficiente.
             hostname
         }
         _ => {

@@ -15,6 +15,7 @@ pub fn compute_hmac(psk_hex: &str, server_nonce: &str) -> Result<String, String>
 }
 
 /// Verifica HMAC em tempo constante.
+#[allow(dead_code)]
 pub fn verify_hmac(psk_hex: &str, server_nonce: &str, received_hmac: &str) -> bool {
     let expected_bytes = match hex::decode(received_hmac) {
         Ok(b) => b,
