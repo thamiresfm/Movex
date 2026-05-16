@@ -1,3 +1,5 @@
+declare const __APP_VERSION__: string;
+
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { addLog, clearLogs } from "./Logs";
@@ -115,7 +117,7 @@ export async function renderDashboard(): Promise<void> {
   const app = document.getElementById("app")!;
 
   // Ler versão real do tauri.conf.json em tempo de execução
-  const appVersion = await getVersion().catch(() => "0.1.0");
+  const appVersion = await getVersion().catch(() => __APP_VERSION__);
 
   app.innerHTML = `
     <div class="app">
