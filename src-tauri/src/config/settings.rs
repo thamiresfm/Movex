@@ -164,7 +164,9 @@ impl Settings {
                         if s.schema_version < 4 {
                             s.schema_version = 4;
                             s.server_cert_fingerprint = None;
-                            let _ = s.save();
+                            if let Err(e) = s.save() {
+                                warn!("Falha ao persistir migração v4: {}", e);
+                            }
                         }
                         if s.schema_version < 5 {
                             s.schema_version = 5;
@@ -172,12 +174,16 @@ impl Settings {
                             s.expected_client_screen_name = None;
                             // Manter o comportamento anterior: quem já usava o app tinha sessão ao abrir
                             s.launch_connection_on_startup = true;
-                            let _ = s.save();
+                            if let Err(e) = s.save() {
+                                warn!("Falha ao persistir migração v5: {}", e);
+                            }
                         }
                         if s.schema_version < 6 {
                             s.schema_version = 6;
                             s.windows_firewall_prompt_done = false;
-                            let _ = s.save();
+                            if let Err(e) = s.save() {
+                                warn!("Falha ao persistir migração v6: {}", e);
+                            }
                         }
                         info!("Configurações carregadas de {:?}", path);
                         return s;

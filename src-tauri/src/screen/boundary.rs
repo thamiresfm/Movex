@@ -12,8 +12,10 @@ pub enum BoundaryResult {
 }
 
 pub fn check_boundary(x_px: f32, y_px: f32, layout: &ScreenLayout) -> BoundaryResult {
-    let w = layout.local.width as f32;
-    let h = layout.local.height as f32;
+    // max(1.0): guard contra resolução 0×0 (ex.: monitor desligado/espelhado)
+    // sem isto y_px / h e x_px / w produzem Infinity ou NaN
+    let w = (layout.local.width as f32).max(1.0);
+    let h = (layout.local.height as f32).max(1.0);
 
     let crossed = match layout.peer_position {
         PeerPosition::Right  => x_px >= w - EDGE_THRESHOLD,
@@ -91,6 +93,40 @@ mod tests {
                 assert!((entry_y - 0.5).abs() < 0.01);
             }
             _ => panic!("deveria ter cruzado"),
+        }
+    }
+
+    /// Regressão: resolução height=0 (monitor off/espelhado) não pode gerar Infinity/NaN.
+    /// Sem o guard `.max(1.0)`, `y_px / 0.0 == Infinity`.
+    #[test]
+    fn zero_height_produz_entrada_finita() {
+        let layout = ScreenLayout {
+            local: ScreenResolution { width: 1920, height: 0, scale_factor: 1.0 },
+            peer: None,
+            peer_position: PeerPosition::Right,
+        };
+        match check_boundary(1919.0, 540.0, &layout) {
+            BoundaryResult::CrossedToPeer { entry_y, .. } => {
+                assert!(entry_y.is_finite(), "entry_y deve ser finito quando height=0, obtido: {}", entry_y);
+            }
+            BoundaryResult::Local => panic!("deveria cruzar a borda direita"),
+        }
+    }
+
+    /// Regressão: resolução width=0 não pode gerar Infinity/NaN em entry_x.
+    #[test]
+    fn zero_width_produz_entrada_finita() {
+        let layout = ScreenLayout {
+            local: ScreenResolution { width: 0, height: 1080, scale_factor: 1.0 },
+            peer: None,
+            peer_position: PeerPosition::Above,
+        };
+        // y=0 <= EDGE_THRESHOLD → cruza
+        match check_boundary(100.0, 0.0, &layout) {
+            BoundaryResult::CrossedToPeer { entry_x, .. } => {
+                assert!(entry_x.is_finite(), "entry_x deve ser finito quando width=0, obtido: {}", entry_x);
+            }
+            BoundaryResult::Local => panic!("deveria cruzar a borda superior"),
         }
     }
 }
