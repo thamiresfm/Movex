@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Validação local executada antes de qualquer `git push`.
+# Bloqueia o push se clippy ou testes falharem.
+# Instalação: bash scripts/setup-dev.sh
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+MANIFEST="$REPO_ROOT/src-tauri/Cargo.toml"
+
+echo "[pre-push] Rodando clippy..."
+if ! cargo clippy --manifest-path "$MANIFEST" --lib -- -D warnings 2>&1; then
+  echo ""
+  echo "[pre-push] BLOQUEADO: clippy reportou erros. Corrija antes de fazer push."
+  exit 1
+fi
+
+echo "[pre-push] Rodando testes..."
+if ! cargo test --manifest-path "$MANIFEST" --lib 2>&1; then
+  echo ""
+  echo "[pre-push] BLOQUEADO: testes falharam. Corrija antes de fazer push."
+  exit 1
+fi
+
+echo "[pre-push] OK — clippy e testes passando."

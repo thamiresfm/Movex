@@ -159,6 +159,12 @@ jobs:
 
       # Empacotar .dmg manualmente via hdiutil — não usamos o bundle do
       # Tauri porque ele recompila o .app, perdendo a assinatura estável.
+      #
+      # Guard anti-Spotlight: o mdworker do macOS indexa o .app recém-copiado
+      # e segura um file lock, causando "Resource busy". Mitigações:
+      #   1. xattr -cr  — remove atributos estendidos (inclusive quarantine)
+      #   2. .metadata_never_index — instrui Spotlight a ignorar o stage dir
+      #   3. Loop de retry com sleep — aguarda o indexador soltar o lock
       - name: Criar DMG manualmente (com .app re-assinado)
         run: |
           set -euo pipefail
@@ -168,11 +174,30 @@ jobs:
           rm -rf "$STAGE" && mkdir -p "$STAGE"
           cp -R "$BUNDLE" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"
+
+          # Prevenir lock do Spotlight / mdworker
+          touch "$STAGE/.metadata_never_index"
+          xattr -cr "$STAGE/Movex.app" || true
+
           DMG_DIR="src-tauri/target/universal-apple-darwin/release/bundle/dmg"
           mkdir -p "$DMG_DIR"
           DMG="$DMG_DIR/Movex_${VERSION}_universal.dmg"
-          hdiutil create -volname "Movex ${VERSION}" \
-            -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+
+          # Retry: hdiutil pode falhar com "Resource busy" se o mdworker ainda
+          # segura o lock. 3 tentativas com 15s de intervalo resolvem na prática.
+          for attempt in 1 2 3; do
+            if hdiutil create -volname "Movex ${VERSION}" \
+              -srcfolder "$STAGE" -ov -format UDZO "$DMG"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "hdiutil falhou após 3 tentativas"
+              exit 1
+            fi
+            echo "Tentativa $attempt falhou — aguardando 15s antes de tentar novamente..."
+            sleep 15
+          done
+
           ls -la "$DMG_DIR"
 
       # Upload manual do .dmg ao Release já criado (pelo job `release`).
