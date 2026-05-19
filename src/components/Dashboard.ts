@@ -514,6 +514,14 @@ export async function renderDashboard(): Promise<void> {
                 As notificações podem ser pedidas automaticamente ao abrir a app; use os botões abaixo se precisar abrir os painéis manualmente.
               </div>
               <div id="permRowMac" style="display:none;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                <div id="accessibilityWarningBanner" style="display:none;width:100%;background:rgba(255,160,0,0.12);border:1px solid var(--warn,#f0a000);border-radius:6px;padding:8px 12px;margin-bottom:4px;font-size:11px;line-height:1.5;">
+                  ⚠️ <strong>Acessibilidade não concedida</strong> — o mouse/teclado do outro PC não será injetado neste Mac.<br>
+                  Após updates o macOS invalida a permissão anterior. Clique <strong>Corrigir</strong> para remover a entrada antiga e conceder novamente.
+                  <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" id="btnFixAccessibility" class="btn" style="font-size:11px;padding:5px 12px;background:var(--warn,#f0a000);color:#000;font-weight:700;border:none;">Corrigir automaticamente</button>
+                    <button type="button" id="btnPermMacAccessibility2" class="btn btn-outline" style="font-size:11px;padding:5px 10px;">Abrir Acessibilidade</button>
+                  </div>
+                </div>
                 <button type="button" id="btnPermMacAccessibility" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Acessibilidade</button>
                 <button type="button" id="btnPermMacInput" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Monitorização de entrada</button>
                 <button type="button" id="btnPermMacNotif" class="btn btn-outline" style="font-size:11px;padding:6px 10px;">macOS · Notificações</button>
@@ -1221,6 +1229,19 @@ export async function renderDashboard(): Promise<void> {
       rowWin.style.display = plat === 'windows' ? 'flex' : 'none';
       rowWin.style.flexDirection = 'column';
     }
+    if (plat === 'macos') {
+      // Verificar se acessibilidade está trusted e mostrar banner de aviso
+      const updateAccessibilityBanner = async () => {
+        try {
+          const diag = await invoke<{ macos_accessibility: boolean }>('diagnose_connection');
+          const banner = document.getElementById('accessibilityWarningBanner');
+          if (banner) banner.style.display = diag.macos_accessibility ? 'none' : 'block';
+        } catch { /* silenciar */ }
+      };
+      await updateAccessibilityBanner();
+      // Re-verificar a cada 5s enquanto o app está aberto (detecta quando o utilizador concede)
+      setInterval(updateAccessibilityBanner, 5000);
+    }
   } catch {
     /* ignorar se o comando não existir */
   }
@@ -1619,9 +1640,19 @@ export async function renderDashboard(): Promise<void> {
   on('btnDoReset',         doReset);
   on('btnDiscardSettings', () => void discardSettings());
   on('btnSaveConfig',      saveConfigAndRefresh);
-  on('btnPermMacAccessibility', () => void openSystemPanel('accessibility'));
-  on('btnPermMacInput',    () => void openSystemPanel('input_monitoring'));
-  on('btnPermMacNotif',    () => void openSystemPanel('notifications'));
+  on('btnPermMacAccessibility',  () => void openSystemPanel('accessibility'));
+  on('btnPermMacAccessibility2', () => void openSystemPanel('accessibility'));
+  on('btnPermMacInput',          () => void openSystemPanel('input_monitoring'));
+  on('btnPermMacNotif',          () => void openSystemPanel('notifications'));
+  on('btnFixAccessibility', async () => {
+    addLog('A corrigir permissão de Acessibilidade (reset TCC + novo prompt)…', 'info');
+    try {
+      await invoke('fix_macos_accessibility');
+      addLog('Prompt de Acessibilidade enviado. Se o diálogo não aparecer, abra Ajustes → Privacidade → Acessibilidade, remova Movex e reative.', 'info');
+    } catch (e) {
+      addLog(`Erro ao corrigir acessibilidade: ${e}`, 'warn');
+    }
+  });
   on('btnPermWinApplyFw',  () => void applyWindowsFirewallRules());
   on('btnClearServerCert', () => void clearServerCertTrust());
   on('btnPermWinFirewallAdv', () => void openSystemPanel('firewall_advanced'));

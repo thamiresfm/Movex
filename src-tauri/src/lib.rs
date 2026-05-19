@@ -135,8 +135,10 @@ pub fn run() {
                 }
             }
 
-            // ── Pedir Acessibilidade (macOS) + texto em Info.plist ─────────────
-            permissions::request_macos_accessibility_prompt();
+            // ── Pedir Acessibilidade (macOS) ───────────────────────────────────
+            // Reset TCC stale primeiro: após cada update o CD hash muda e a entrada
+            // antiga fica trusted=false mesmo com o toggle ON nas Definições.
+            permissions::reset_and_request_macos_accessibility();
 
             // ── Auto-start da conexão ao abrir o app ─────────────────────────
             {
@@ -213,6 +215,7 @@ pub fn run() {
             permissions::open_system_settings,
             permissions::get_platform_kind,
             permissions::windows_apply_firewall_rules_for_movex,
+            permissions::fix_macos_accessibility,
         ])
         .run(tauri::generate_context!())
         .expect("erro ao iniciar Movex");

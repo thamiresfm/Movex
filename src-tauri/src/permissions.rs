@@ -17,6 +17,38 @@ pub fn get_platform_kind() -> String {
     }
 }
 
+/// No macOS, limpa a entrada TCC stale (binário antigo) e volta a pedir permissão.
+///
+/// O TCC ancora a permissão no CD hash do binário. Após cada atualização do app
+/// o CD hash muda e a entrada antiga fica stale: `AXIsProcessTrusted()` devolve
+/// `false` mesmo com o toggle ON nas Definições. `tccutil reset` remove a entrada
+/// stale; o próximo `AXIsProcessTrustedWithOptions(prompt=true)` mostra o diálogo
+/// nativo para o novo binário.
+///
+/// Funciona sem admin em apps não-sandbox (Movex não é sandbox).
+#[cfg(target_os = "macos")]
+pub fn reset_and_request_macos_accessibility() {
+    if macos_accessibility_trusted() {
+        return;
+    }
+    // Remove a entrada stale para forçar novo prompt
+    let _ = std::process::Command::new("tccutil")
+        .args(["reset", "Accessibility", "com.movex.app"])
+        .status();
+    tracing::info!("TCC Acessibilidade resetado — a pedir nova autorização");
+    request_macos_accessibility_prompt();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn reset_and_request_macos_accessibility() {}
+
+/// Comando IPC: usado pelo botão «Corrigir» na UI quando trusted=false após update.
+#[tauri::command]
+pub fn fix_macos_accessibility() {
+    #[cfg(target_os = "macos")]
+    reset_and_request_macos_accessibility();
+}
+
 /// No macOS, mostra o diálogo nativo que pede ao utilizador para autorizar Acessibilidade
 /// (quando ainda não concedida). É a forma suportada pela Apple; não é possível conceder
 /// automaticamente sem interação.
