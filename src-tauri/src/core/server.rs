@@ -481,6 +481,14 @@ async fn handle_client<S>(
 
     capture.unlock_cursor();
     capture.stop();
+    // Garantir que o modo remoto é desligado ao terminar a sessão — sem isto,
+    // se a conexão cair com o cursor no PC remoto, active_screen_remote fica
+    // preso em true e a detecção de borda nunca dispara na próxima sessão.
+    state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
+    {
+        let mut active = state.active_screen.lock().await;
+        *active = crate::core::state::ActiveScreen::Local;
+    }
     { *state.message_tx.lock().await = None; }
     state.stats.reset();
     server_resume_listening(&state).await;
