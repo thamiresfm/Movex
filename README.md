@@ -2,7 +2,18 @@
 
 > Controle múltiplos computadores com um único teclado e mouse pela rede local.
 
-(https://github.com/thamiresfm/Movex/actions/workflows/build.yml)
+[![CI](https://github.com/thamiresfm/Movex/actions/workflows/ci.yml/badge.svg)](https://github.com/thamiresfm/Movex/actions/workflows/ci.yml)
+[![Release](https://github.com/thamiresfm/Movex/actions/workflows/release.yml/badge.svg)](https://github.com/thamiresfm/Movex/releases/latest)
+
+---
+
+## Documentação
+
+| Documento | Descrição |
+|-----------|-----------|
+| [Guia de Configuração](docs/CONFIGURACAO.md) | Todos os campos do `config.json`, passo a passo, firewall, TLS, clipboard e resolução de problemas |
+| [Registro de Bugs](docs/bugs/BUGS.md) | Bugs conhecidos por versão e respetivo status |
+| [Modelo KVM & UX](docs/MODELO_KVM_E_UX.md) | Referência interna: comparação com Barrier/Deskflow e checklist de QA |
 
 ---
 
