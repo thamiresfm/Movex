@@ -88,13 +88,21 @@ pub struct Settings {
     /// Windows: já foi apresentado o pedido automático de regras no firewall (UAC) na primeira conexão.
     #[serde(default)]
     pub windows_firewall_prompt_done: bool,
+    /// Multiplicador de velocidade do cursor no lado receptor.
+    /// 1.0 = proporcional ao ecrã remoto (padrão neutral).
+    /// Aumente para 1.2-1.5 se o cursor parecer "pesado" ou lento no Mac quando
+    /// controlado pelo Windows (ecrãs com tamanhos diferentes).
+    #[serde(default = "default_mouse_sensitivity")]
+    pub mouse_sensitivity: f64,
 }
+
+fn default_mouse_sensitivity() -> f64 { 1.2 }
 
 impl Default for Settings {
     fn default() -> Self {
         let hn = get_hostname();
         Self {
-            schema_version: 6,
+            schema_version: 7,
             hostname: hn.clone(),
             screen_name: hn,
             expected_client_screen_name: None,
@@ -113,6 +121,7 @@ impl Default for Settings {
             recent_peers: vec![],
             server_cert_fingerprint: None,
             windows_firewall_prompt_done: false,
+            mouse_sensitivity: default_mouse_sensitivity(),
         }
     }
 }
@@ -183,6 +192,13 @@ impl Settings {
                             s.windows_firewall_prompt_done = false;
                             if let Err(e) = s.save() {
                                 warn!("Falha ao persistir migração v6: {}", e);
+                            }
+                        }
+                        if s.schema_version < 7 {
+                            s.schema_version = 7;
+                            s.mouse_sensitivity = default_mouse_sensitivity();
+                            if let Err(e) = s.save() {
+                                warn!("Falha ao persistir migração v7: {}", e);
                             }
                         }
                         info!("Configurações carregadas de {:?}", path);
@@ -256,7 +272,7 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.port, original.port);
         assert_eq!(restored.psk_hex, original.psk_hex);
-        assert_eq!(restored.schema_version, 6);
+        assert_eq!(restored.schema_version, 7);
         assert_eq!(restored.screen_name, original.screen_name);
     }
 

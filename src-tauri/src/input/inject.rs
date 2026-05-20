@@ -17,3 +17,10 @@ pub fn inject_event(event: InputEvent) {
         error!("Falha ao injetar evento: {}", e);
     }
 }
+
+/// Actualiza a sensibilidade do cursor para o lado receptor.
+/// Chamado na inicialização a partir das Settings.
+pub fn set_mouse_sensitivity(s: f64) {
+    #[cfg(target_os = "macos")]
+    crate::input::platform::macos::set_sensitivity(s as f32);
+}

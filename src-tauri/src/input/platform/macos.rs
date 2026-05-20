@@ -18,8 +18,25 @@
 //! - A velocidade do cursor inclui a aceleração do macOS (via location diff)
 
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tracing::{error, info};
+
+// ── Sensibilidade do cursor (lado receptor / injector) ─────────────────────────
+
+// 1.2f32 em IEEE 754 single-precision = 0x3F99999A
+static MOUSE_SENS: AtomicU32 = AtomicU32::new(0x3F99999A);
+
+// Última posição virtual (0..1) injectada. u32::MAX = não inicializada.
+static INJ_PREV_X: AtomicU32 = AtomicU32::new(u32::MAX);
+static INJ_PREV_Y: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Atualiza a sensibilidade do cursor e reinicia o tracking de posição
+/// para que o próximo evento use posicionamento absoluto (sem salto).
+pub fn set_sensitivity(s: f32) {
+    MOUSE_SENS.store(s.clamp(0.1, 5.0).to_bits(), Ordering::Release);
+    INJ_PREV_X.store(u32::MAX, Ordering::Release);
+    INJ_PREV_Y.store(u32::MAX, Ordering::Release);
+}
 
 use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
@@ -457,17 +474,62 @@ impl InputInjector for MacOsInjector {
 
         match event {
             InputEvent::MouseMove { x, y } => {
-                // Convenção padrão: x=0 esq, x=1 dir, y=0 topo, y=1 base.
-                // Quartz: origin na top-left, Y cresce para baixo → mapeamento directo.
                 use core_graphics::display::CGDisplay;
+                use core_graphics::event::EventField;
                 let b = CGDisplay::main().bounds();
-                let gx = b.origin.x + (x as f64) * b.size.width;
-                let gy = b.origin.y + (y as f64) * b.size.height;
+
+                let prev_x_bits = INJ_PREV_X.load(Ordering::Acquire);
+                let prev_y_bits = INJ_PREV_Y.load(Ordering::Acquire);
+                INJ_PREV_X.store(x.to_bits(), Ordering::Release);
+                INJ_PREV_Y.store(y.to_bits(), Ordering::Release);
+
+                let (gx, gy, dx_px, dy_px) = if prev_x_bits == u32::MAX {
+                    // Primeira injeção ou reset: posicionar absolutamente
+                    let gx = b.origin.x + x as f64 * b.size.width;
+                    let gy = b.origin.y + y as f64 * b.size.height;
+                    (gx, gy, 0i64, 0i64)
+                } else {
+                    let prev_x = f32::from_bits(prev_x_bits) as f64;
+                    let prev_y = f32::from_bits(prev_y_bits) as f64;
+                    let dx_virt = x as f64 - prev_x;
+                    let dy_virt = y as f64 - prev_y;
+
+                    // Salto grande = cursor acabou de entrar neste ecrã → posicionar absolutamente
+                    if dx_virt.abs() > 0.2 || dy_virt.abs() > 0.2 {
+                        let gx = b.origin.x + x as f64 * b.size.width;
+                        let gy = b.origin.y + y as f64 * b.size.height;
+                        (gx, gy, 0i64, 0i64)
+                    } else {
+                        // Movimento normal: aplicar sensibilidade e injetar relativamente
+                        // ao cursor actual para evitar que tamanhos diferentes de ecrã
+                        // façam o cursor parecer "pesado".
+                        let sens = f32::from_bits(MOUSE_SENS.load(Ordering::Acquire)) as f64;
+                        let dx_px = (dx_virt * b.size.width * sens).round() as i64;
+                        let dy_px = (dy_virt * b.size.height * sens).round() as i64;
+                        let (cur_x, cur_y) = get_cursor_position().unwrap_or((
+                            b.origin.x + prev_x * b.size.width,
+                            b.origin.y + prev_y * b.size.height,
+                        ));
+                        let gx = (cur_x + dx_px as f64)
+                            .clamp(b.origin.x, b.origin.x + b.size.width  - 1.0);
+                        let gy = (cur_y + dy_px as f64)
+                            .clamp(b.origin.y, b.origin.y + b.size.height - 1.0);
+                        (gx, gy, dx_px, dy_px)
+                    }
+                };
+
                 let ev = CGEvent::new_mouse_event(
                     source, CGEventType::MouseMoved,
                     CGPoint { x: gx, y: gy }, CGMouseButton::Left,
                 ).map_err(|_| "Falha MouseMove".to_string())?;
-                ev.post(core_graphics::event::CGEventTapLocation::HID);
+                // Delta informativo para apps que consumam kCGMouseEventDeltaX/Y
+                if dx_px != 0 || dy_px != 0 {
+                    ev.set_integer_value_field(EventField::MOUSE_EVENT_DELTA_X, dx_px);
+                    ev.set_integer_value_field(EventField::MOUSE_EVENT_DELTA_Y, dy_px);
+                }
+                // Session em vez de HID: bypassa os hardware taps (incluindo o nosso
+                // CGEventTap) e evita feedback loop com o MacOsCapture.
+                ev.post(core_graphics::event::CGEventTapLocation::Session);
             }
             InputEvent::MouseButton { button, pressed } => {
                 let (et, cb) = match (button, pressed) {

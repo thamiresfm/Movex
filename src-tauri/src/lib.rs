@@ -22,6 +22,7 @@ pub fn run() {
     crate::core::logging::init();
 
     let settings = Settings::load();
+    crate::input::inject::set_mouse_sensitivity(settings.mouse_sensitivity);
     let shared_state: SharedState = Arc::new(AppState::new(settings));
 
     let mut builder = tauri::Builder::default()
