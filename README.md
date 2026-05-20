@@ -13,7 +13,6 @@
 |-----------|-----------|
 | [Guia de Configuração](docs/CONFIGURACAO.md) | Todos os campos do `config.json`, passo a passo, permissões macOS/Windows, firewall, TLS, clipboard e resolução de problemas |
 | [Registro de Bugs](docs/bugs/BUGS.md) | Bugs conhecidos por versão e respetivo status |
-| [Modelo KVM & UX](docs/MODELO_KVM_E_UX.md) | Referência interna: comparação com Barrier/Deskflow e checklist de QA |
 
 ---
 
