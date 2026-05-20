@@ -54,6 +54,7 @@ function applyPanelConnectionButtons(status: StatusPayload): void {
 function updateMatrixHint(
   settings: { role?: string } | null,
   status: StatusPayload,
+  lastPeer?: string | null,
 ): void {
   const hintMatriz = document.getElementById('matrixConnHint');
   if (!hintMatriz) return;
@@ -88,8 +89,10 @@ function updateMatrixHint(
       'Este PC está como Servidor à escuta. No outro computador: papel Cliente, IP deste PC (painel «Rede») e «Conectar». Para parar, use «Desconectar».';
   } else if (clienteLiga) {
     hintMatriz.style.display = 'block';
-    hintMatriz.textContent =
-      'A ligar ao servidor… Se falhar, confira IP, porta, firewall e a mesma chave (PSK) nos dois PCs.';
+    // Se já ligou antes a um peer, é reconexão — mensagem menos alarmista
+    hintMatriz.textContent = lastPeer
+      ? `A reconectar a "${lastPeer}"… Aguarde ou use «Desconectar» para cancelar.`
+      : 'A ligar ao servidor… Se falhar, confira IP, porta, firewall e a mesma chave (PSK) nos dois PCs.';
   } else {
     hintMatriz.style.display = 'none';
     hintMatriz.textContent = '';
@@ -462,7 +465,7 @@ export async function renderDashboard(): Promise<void> {
                   <div style="font-size:14px;font-weight:700;color:var(--text);">📋 Clipboard Compartilhado</div>
                   <label class="toggle"><input type="checkbox" checked id="clipboardToggle"/><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
                 </div>
-                <div style="font-size:11px;color:var(--text-2);line-height:1.5;">Copie em um computador e cole no outro.</div>
+                <div style="font-size:11px;color:var(--text-2);line-height:1.5;">Copie em um computador e cole no outro. Somente texto.</div>
               </div>
             </div>
 
@@ -662,6 +665,9 @@ export async function renderDashboard(): Promise<void> {
 
   let stopStatusPolling: () => void = () => {};
 
+  // Último peer com ligação bem-sucedida — usado para distinguir reconexão de 1.ª ligação
+  let lastConnectedPeer: string | null = null;
+
   // Handlers registados ANTES de initStatusListener — o primeiro get_status já preenche IP/latência
   onStatusChange(async (status) => {
     let settings = cachedSettings;
@@ -675,16 +681,18 @@ export async function renderDashboard(): Promise<void> {
         const t = (status.status_text ?? '').trim();
         // Mostrar texto claro: quando conectado nunca mostrar "conectando"
         if (status.connected) {
-          // Extrair só o hostname do peer (evitar texto longo com IP e latência)
-            const peer = (status.peer_hostname ?? t.replace(/^Conectado a\s*/i, '').split('@')[0].trim()) || 'Par';
+          const peer = (status.peer_hostname ?? t.replace(/^Conectado a\s*/i, '').split('@')[0].trim()) || 'Par';
+          lastConnectedPeer = peer;
           line.textContent = `● Conectado a ${peer}`;
           line.style.color = 'var(--cyan)';
         } else if (!t) {
-          line.textContent = 'Desconectado';
+          line.textContent = lastConnectedPeer ? `● Desconectado (era: ${lastConnectedPeer})` : 'Desconectado';
           line.style.color = 'var(--text-2)';
         } else {
           // Aguardando, Conectando..., Reconectando...
-          line.textContent = t;
+          // Se já ligou antes, mostrar "Reconectando a [peer]" em vez do genérico "Conectando..."
+          const isReconnect = lastConnectedPeer && /conectando/i.test(t);
+          line.textContent = isReconnect ? `● Reconectando a ${lastConnectedPeer}…` : t;
           const isTransient = /aguardando|conectando|reconect/i.test(t);
           line.style.color = isTransient ? 'var(--cyan)' : 'var(--text-2)';
         }
@@ -752,7 +760,7 @@ export async function renderDashboard(): Promise<void> {
         uptimeEl.innerHTML = `<span style="font-size:${hrs > 0 ? '28' : '22'}px">${uptimeStr}</span><span style="font-size:12px;color:var(--text-2);margin-left:4px;">uptime</span>`;
       }
       applyPanelConnectionButtons(status);
-      updateMatrixHint(settings ?? null, status);
+      updateMatrixHint(settings ?? null, status, lastConnectedPeer);
       updateDevices(status, settings ?? null);
       // Mostrar seletor de posição quando em sessão (à escuta ou conectado ao par)
       const posSelector = document.getElementById('peerPositionSelector');
@@ -1316,7 +1324,7 @@ export async function renderDashboard(): Promise<void> {
         el.style.color = sessionLooksActive(st) || waiting ? 'var(--cyan)' : 'var(--text-2)';
       }
       applyPanelConnectionButtons(st);
-      updateMatrixHint(cachedSettings ?? null, st);
+      updateMatrixHint(cachedSettings ?? null, st, lastConnectedPeer);
     }
     navTo('painel');
   };

@@ -2518,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "movex"
-version = "0.3.37"
+version = "0.3.38"
 dependencies = [
  "arboard",
  "bincode",
@@ -2530,7 +2530,6 @@ dependencies = [
  "hmac",
  "hostname",
  "if-addrs",
- "image",
  "mdns-sd",
  "objc",
  "rand 0.8.5",
