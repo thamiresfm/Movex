@@ -2,7 +2,7 @@
 
 > Controle múltiplos computadores com um único teclado e mouse pela rede local.
 
-[![Build Movex](https://github.com/thamiresfm/Movex/actions/workflows/build.yml/badge.svg)](https://github.com/thamiresfm/Movex/actions/workflows/build.yml)
+(https://github.com/thamiresfm/Movex/actions/workflows/build.yml)
 
 ---
 
