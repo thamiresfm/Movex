@@ -1,6 +1,6 @@
 {
   "name": "movex",
-  "version": "0.3.34",
+  "version": "0.3.39",
   "type": "module",
   "scripts": {
     "dev": "vite",
