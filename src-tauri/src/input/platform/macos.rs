@@ -446,7 +446,15 @@ impl InputInjector for MacOsInjector {
                 let Some(mac_kc) = crate::input::keycodes::hid_to_mac(keycode) else {
                     return Ok(());
                 };
-                let ev = CGEvent::new_keyboard_event(source, mac_kc, pressed)
+                // Teclado usa CombinedSessionState + Session: em macOS Catalina+ a
+                // injeção de teclado via HIDSystemState+HID pode ser descartada
+                // silenciosamente mesmo com Acessibilidade concedida. Session é o
+                // nível correto para injeção sintética de teclas.
+                use core_graphics::event_source::CGEventSourceStateID;
+                let kb_source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+                    .or_else(|_| CGEventSource::new(CGEventSourceStateID::HIDSystemState))
+                    .map_err(|_| "Falha ao criar CGEventSource para teclado".to_string())?;
+                let ev = CGEvent::new_keyboard_event(kb_source, mac_kc, pressed)
                     .map_err(|_| "Falha KeyEvent".to_string())?;
                 let mut flags = CGEventFlags::empty();
                 if modifiers.contains(Modifiers::SHIFT) { flags |= CGEventFlags::CGEventFlagShift; }
@@ -454,7 +462,7 @@ impl InputInjector for MacOsInjector {
                 if modifiers.contains(Modifiers::ALT)   { flags |= CGEventFlags::CGEventFlagAlternate; }
                 if modifiers.contains(Modifiers::META)  { flags |= CGEventFlags::CGEventFlagCommand; }
                 ev.set_flags(flags);
-                ev.post(core_graphics::event::CGEventTapLocation::HID);
+                ev.post(core_graphics::event::CGEventTapLocation::Session);
             }
         }
         Ok(())
