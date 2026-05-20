@@ -76,9 +76,6 @@ pub fn request_macos_accessibility_prompt() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn request_macos_accessibility_prompt() {}
-
 /// Verifica (sem disparar diálogo) se o Movex tem permissão de Acessibilidade no macOS.
 /// Em outras plataformas devolve sempre `true` — não existe equivalente.
 ///
