@@ -18,7 +18,6 @@ O **Movex** é um aplicativo de KVM por software — semelhante ao Barrier e Des
 | Feature | Status |
 |---|---|
 | Controle de mouse e teclado entre máquinas | ✅ |
-| Transferência de arquivos com verificação SHA-256 | ✅ |
 | Sincronização de clipboard (texto) | ✅ |
 | Descoberta automática via mDNS | ✅ |
 | Conexão segura com TLS 1.3 | ✅ |
