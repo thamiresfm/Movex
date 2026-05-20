@@ -428,7 +428,14 @@ impl InputCapture for WindowsCapture {
         // "agarrar" porque o utilizador continua a mexer o mouse esperando que
         // o cursor saia de onde estava antes do cruzamento.
         if WIN_PRE_LOCK_VALID.swap(false, Ordering::AcqRel) {
-            let (left, top, w, h) = primary_display_bounds();
+            // Usar o bounding-box de TODOS os monitores em vez de só o primário.
+            // Se o primário não for o monitor mais à esquerda (ex.: monitor extra
+            // ligado à esquerda do primário), primary_display_bounds() tem origem
+            // em (0,0) mas pre_x pode ser negativo → o cursor era clampado para
+            // o lado direito do primário em vez de aparecer no lado esquerdo onde
+            // o utilizador cruzou. desktop_bounding_box_cached() devolve o rect
+            // que cobre todos os monitores, coerente com check_boundary.
+            let (left, top, w, h) = crate::screen::layout::desktop_bounding_box_cached();
             let pre_x = WIN_PRE_LOCK_X.load(Ordering::Acquire);
             let pre_y = WIN_PRE_LOCK_Y.load(Ordering::Acquire);
             const MARGIN: i32 = 80;
