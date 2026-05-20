@@ -1,16 +1,78 @@
+# ── Dependências ──────────────────────────────────────────────────────────────
 node_modules/
-target/
-dist/
-.DS_Store
-package-lock.json
+.pnp
+.pnp.*
 
-# Cópias locais de backup (não versionar)
-**/*.old.rs
-**/*.old.ts
-**/*.ts.old
-**/*.rs.old
-**/*.old.md
-**/*.old.css
-**/*.json.old
-**/*.conf.old
+# ── Build / artefactos ────────────────────────────────────────────────────────
+dist/
+target/
+
+# npm lock — gerado automaticamente, não versionar
+package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Tauri ─────────────────────────────────────────────────────────────────────
+# Ferramentas do instalador Windows baixadas em runtime pelo Tauri
+src-tauri/WixTools/
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+*.log.*
+logs/
+
+# ── Variáveis de ambiente ─────────────────────────────────────────────────────
+.env
+.env.*
+.env.local
+!.env.example
+
+# ── Sistema operativo ─────────────────────────────────────────────────────────
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ── Editores e IDEs ───────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
+.history/
+
+# ── Arquivos de backup e temporários ─────────────────────────────────────────
+**/*.old
+**/*.old.*
+**/*.old[0-9]
+**/*.bak
 **/*.bak-*
+**/*.bak_*
+**/*.tmp
+
+# ── Binários gerados (instaladores locais) ───────────────────────────────────
+*.dmg
+*.msi
+*.deb
+*.rpm
+*.AppImage
+*.snap
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+**/*.pdb
