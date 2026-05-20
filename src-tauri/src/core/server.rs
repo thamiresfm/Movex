@@ -183,7 +183,7 @@ async fn handle_client<S>(
     };
 
     let peer_hostname = match hello {
-        Message::Hello { version, hostname, hmac: _ } => {
+        Message::Hello { version, hostname, hmac } => {
             if version != PROTOCOL_VERSION {
                 let _ = send_message(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
@@ -191,8 +191,25 @@ async fn handle_client<S>(
                 server_resume_listening(&state).await;
                 return;
             }
-            // PSK não é validada pelo servidor: TLS na rede local é suficiente.
-            hostname
+            let psk = { state.settings.lock().await.psk_hex.clone() };
+            if !crate::core::auth::verify_hmac(&psk, &server_nonce, &hmac) {
+                warn!("Handshake rejeitado de {}: HMAC inválido (PSK incorreta)", peer_addr);
+                let _ = send_message(&mut stream, &Message::HelloReject {
+                    reason: "Chave de segurança (PSK) incorreta.".into(),
+                }).await;
+                server_resume_listening(&state).await;
+                return;
+            }
+            // Truncar para evitar hostname arbitrariamente longo em notificações/logs.
+            let h = hostname.trim().chars().take(64).collect::<String>();
+            if h.is_empty() {
+                let _ = send_message(&mut stream, &Message::HelloReject {
+                    reason: "Nome de ecrã vazio.".into(),
+                }).await;
+                server_resume_listening(&state).await;
+                return;
+            }
+            h
         }
         _ => {
             warn!("Esperava Hello de {}", peer_addr);

@@ -15,15 +15,16 @@ pub fn compute_hmac(psk_hex: &str, server_nonce: &str) -> Result<String, String>
 }
 
 /// Verifica HMAC em tempo constante.
-#[allow(dead_code)]
 pub fn verify_hmac(psk_hex: &str, server_nonce: &str, received_hmac: &str) -> bool {
     let expected_bytes = match hex::decode(received_hmac) {
         Ok(b) => b,
         Err(_) => return false,
     };
 
-    let key_bytes = hex::decode(psk_hex)
-        .unwrap_or_else(|_| psk_hex.as_bytes().to_vec());
+    let key_bytes = match hex::decode(psk_hex) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
 
     let mut mac = match HmacSha256::new_from_slice(&key_bytes) {
         Ok(m) => m,

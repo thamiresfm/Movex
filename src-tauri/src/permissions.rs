@@ -205,12 +205,15 @@ netsh advfirewall firewall add rule name="Movex mDNS"      dir=in  action=allow 
 netsh advfirewall firewall add rule name="Movex App In"    dir=in  action=allow program="$exe" profile=any
 netsh advfirewall firewall add rule name="Movex App Out"   dir=out action=allow program="$exe" profile=any
 Write-Host 'Regras Movex aplicadas (TCP/UDP porta' $port ', mDNS 5353, programa).'
+try {{ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }} catch {{}}
 "#,
         port = port,
         exe_ps = exe_ps
     );
 
-    let ps1 = std::env::temp_dir().join("movex-firewall-rules.ps1");
+    // Nome aleatório para evitar TOCTOU (sobrescrita do ficheiro antes da elevação).
+    let random_id: u64 = rand::random();
+    let ps1 = std::env::temp_dir().join(format!("movex_fw_{:016x}.ps1", random_id));
     let mut f = std::fs::File::create(&ps1).map_err(|e| e.to_string())?;
     f.write_all(script.as_bytes()).map_err(|e| e.to_string())?;
     drop(f);

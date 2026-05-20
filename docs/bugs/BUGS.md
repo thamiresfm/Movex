@@ -17,6 +17,18 @@ Para reportar um novo bug, copie `template.md`, preencha e adicione uma entrada 
 
 ---
 
+## v0.1.1
+
+| ID | Título | Componente | Status |
+|----|--------|-----------|--------|
+| BUG-011-001 | Servidor ignorava HMAC — qualquer PSK era aceita | `core/server.rs` · handshake | ✅ Corrigido em v0.1.1 |
+| BUG-011-002 | XSS em mensagens de log via `innerHTML` sem escape | Frontend · `Logs.ts` | ✅ Corrigido em v0.1.1 |
+| BUG-011-003 | `verify_hmac` com PSK hex inválida usava fallback silencioso | `core/auth.rs` | ✅ Corrigido em v0.1.1 |
+| BUG-011-004 | `peer_hostname` sem limite de tamanho em notificações | `core/server.rs` | ✅ Corrigido em v0.1.1 |
+| BUG-011-005 | Script PS1 de firewall com nome fixo sujeito a TOCTOU | `permissions.rs` · Windows | ✅ Corrigido em v0.1.1 |
+
+---
+
 ## Como adicionar um bug
 
 1. Copie `docs/bugs/template.md` para `docs/bugs/BUG-<versão>-<número>.md`

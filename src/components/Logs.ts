@@ -18,12 +18,28 @@ export function clearLogs() {
 function renderLogs() {
   const el = document.getElementById("logBody");
   if (!el) return;
-  el.innerHTML = entries.map(e =>
-    `<div class="log-line${e.level==='warn'?' warn-line':''}">
-      <span class="log-time">${e.time}</span>
-      <span class="log-tag ${e.level}">${e.level.toUpperCase()}</span>
-      <span class="log-msg">${e.msg}</span>
-    </div>`
-  ).join('');
+  const fragment = document.createDocumentFragment();
+  for (const e of entries) {
+    const line = document.createElement("div");
+    line.className = "log-line" + (e.level === "warn" ? " warn-line" : "");
+
+    const time = document.createElement("span");
+    time.className = "log-time";
+    time.textContent = e.time;
+
+    const tag = document.createElement("span");
+    tag.className = `log-tag ${e.level}`;
+    tag.textContent = e.level.toUpperCase();
+
+    const msg = document.createElement("span");
+    msg.className = "log-msg";
+    msg.textContent = e.msg;
+
+    line.appendChild(time);
+    line.appendChild(tag);
+    line.appendChild(msg);
+    fragment.appendChild(line);
+  }
+  el.replaceChildren(fragment);
   el.scrollTop = el.scrollHeight;
 }
