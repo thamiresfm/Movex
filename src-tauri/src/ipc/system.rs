@@ -105,6 +105,13 @@ pub async fn diagnose_connection(state: State<'_, SharedState>) -> Result<Diagno
     })
 }
 
+/// Verifica apenas se o macOS concedeu Acessibilidade (sem probe TCP nem mDNS).
+/// Usado pelo banner periódico do Dashboard — leve e sem efeitos colaterais.
+#[tauri::command]
+pub fn check_accessibility() -> bool {
+    crate::permissions::macos_accessibility_trusted()
+}
+
 /// Ativa/desativa borda luminosa no monitor via evento Tauri (sem eval/unsafe-inline)
 #[tauri::command]
 pub async fn set_screen_border(

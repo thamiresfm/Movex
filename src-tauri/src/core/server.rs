@@ -103,6 +103,24 @@ pub async fn start(state: SharedState, cancel: CancellationToken) -> Result<(), 
                         }
 
                         info!("Nova conexão TCP de {}", peer_addr);
+                        // TCP keepalive: previne que NATs/routers derrubem a conexão por inatividade
+                        let tcp_stream = {
+                            use socket2::{Socket, TcpKeepalive};
+                            match tcp_stream.into_std() {
+                                Ok(std_s) => {
+                                    let sock = Socket::from(std_s);
+                                    let ka = TcpKeepalive::new()
+                                        .with_time(std::time::Duration::from_secs(5))
+                                        .with_interval(std::time::Duration::from_secs(2));
+                                    let _ = sock.set_tcp_keepalive(&ka);
+                                    match tokio::net::TcpStream::from_std(sock.into()) {
+                                        Ok(s) => s,
+                                        Err(e) => { warn!("Falha ao recriar TcpStream: {}", e); continue; }
+                                    }
+                                }
+                                Err(e) => { warn!("Falha ao converter TcpStream: {}", e); continue; }
+                            }
+                        };
                         let tls_stream = match acceptor.accept(tcp_stream).await {
                             Ok(s) => s,
                             Err(e) => {
@@ -355,7 +373,7 @@ async fn handle_client<S>(
         Err(e) => { tracing::warn!("FileReceiver indisponível: {}", e); None }
     };
 
-    let ping_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    let ping_interval = tokio::time::interval(std::time::Duration::from_secs(1));
     tokio::pin!(ping_interval);
     let mut ping_sent_at: Option<std::time::Instant> = None;
 

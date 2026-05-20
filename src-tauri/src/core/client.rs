@@ -74,6 +74,33 @@ pub async fn connect_to_addr(
         }
     };
 
+    // TCP keepalive: previne que NATs/routers derrubem a conexão por inatividade
+    let tcp = {
+        use socket2::{Socket, TcpKeepalive};
+        match tcp.into_std() {
+            Ok(std_s) => {
+                let sock = Socket::from(std_s);
+                let ka = TcpKeepalive::new()
+                    .with_time(std::time::Duration::from_secs(5))
+                    .with_interval(std::time::Duration::from_secs(2));
+                let _ = sock.set_tcp_keepalive(&ka);
+                match tokio::net::TcpStream::from_std(sock.into()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Falha ao recriar TcpStream com keepalive: {}", e);
+                        connection_failed_client(&state).await;
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Falha ao converter TcpStream para socket2: {}", e);
+                connection_failed_client(&state).await;
+                return;
+            }
+        }
+    };
+
     let known_fp = state.settings.lock().await.server_cert_fingerprint.clone();
     let (connector, tofu_verifier) = create_tls_connector(known_fp);
     let domain = ServerName::try_from("movex.local").expect("domínio inválido");

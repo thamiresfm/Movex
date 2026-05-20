@@ -1233,9 +1233,9 @@ export async function renderDashboard(): Promise<void> {
       // Verificar se acessibilidade está trusted e mostrar banner de aviso
       const updateAccessibilityBanner = async () => {
         try {
-          const diag = await invoke<{ macos_accessibility: boolean }>('diagnose_connection');
+          const trusted = await invoke<boolean>('check_accessibility');
           const banner = document.getElementById('accessibilityWarningBanner');
-          if (banner) banner.style.display = diag.macos_accessibility ? 'none' : 'block';
+          if (banner) banner.style.display = trusted ? 'none' : 'block';
         } catch { /* silenciar */ }
       };
       await updateAccessibilityBanner();

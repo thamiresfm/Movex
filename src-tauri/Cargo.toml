@@ -1,6 +1,6 @@
 [package]
 name = "movex"
-version = "0.3.34"
+version = "0.3.35"
 edition = "2021"
 description = "KVM por software — controle múltiplos computadores com um teclado e mouse"
 authors = ["Thamires Fernandes Mendes"]
@@ -56,6 +56,7 @@ if-addrs  = "0.13"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender   = "0.2"
+socket2            = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 tempfile = "3"

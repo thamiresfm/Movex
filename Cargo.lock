@@ -2518,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "movex"
-version = "0.3.31"
+version = "0.3.35"
 dependencies = [
  "arboard",
  "bincode",
@@ -2539,6 +2539,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2 0.5.10",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
