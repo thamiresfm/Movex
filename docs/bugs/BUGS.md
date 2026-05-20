@@ -29,6 +29,16 @@ Para reportar um novo bug, copie `template.md`, preencha e adicione uma entrada 
 
 ---
 
+## v0.1.2
+
+| ID | Título | Componente | Status |
+|----|--------|-----------|--------|
+| BUG-012-001 | Teclas modificadoras (Shift/Ctrl/Alt/Cmd) não encaminhadas quando macOS é servidor | macOS · `FlagsChanged` ausente do CGEventTap | ✅ Corrigido em v0.1.2 |
+| BUG-012-002 | Teclas do numpad e ABNT2 (VK_NUMPAD0-9, VK_ABNT_C1) descartadas | `input/keycodes.rs` · `vk_to_hid` incompleto | ✅ Corrigido em v0.1.2 |
+| BUG-012-003 | Modificador prematuramente solto no destino ao largar qualquer tecla | Windows · `WindowsInjector` · modifier sandwich indevido | ✅ Corrigido em v0.1.2 |
+
+---
+
 ## Como adicionar um bug
 
 1. Copie `docs/bugs/template.md` para `docs/bugs/BUG-<versão>-<número>.md`

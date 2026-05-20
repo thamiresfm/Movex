@@ -63,13 +63,51 @@ pub fn vk_to_hid(vk: u32) -> Option<u32> {
         0xA2 => 0xE0, // VK_LCONTROL
         0xA3 => 0xE4, // VK_RCONTROL
         0xA4 => 0xE2, // VK_LMENU (left Alt)
-        0xA5 => 0xE6, // VK_RMENU (right Alt)
+        0xA5 => 0xE6, // VK_RMENU (right Alt / AltGr)
         0x5B => 0xE3, // VK_LWIN (left meta)
         0x5C => 0xE7, // VK_RWIN
         // Genéricos, quando o Windows não diferencia esquerdo/direito
         0x10 => 0xE1, // VK_SHIFT  → trata como left
         0x11 => 0xE0, // VK_CONTROL
         0x12 => 0xE2, // VK_MENU (Alt)
+        // Numpad
+        0x60 => 0x62, // VK_NUMPAD0
+        0x61 => 0x59, // VK_NUMPAD1
+        0x62 => 0x5A, // VK_NUMPAD2
+        0x63 => 0x5B, // VK_NUMPAD3
+        0x64 => 0x5C, // VK_NUMPAD4
+        0x65 => 0x5D, // VK_NUMPAD5
+        0x66 => 0x5E, // VK_NUMPAD6
+        0x67 => 0x5F, // VK_NUMPAD7
+        0x68 => 0x60, // VK_NUMPAD8
+        0x69 => 0x61, // VK_NUMPAD9
+        0x6A => 0x55, // VK_MULTIPLY  → Numpad *
+        0x6B => 0x57, // VK_ADD       → Numpad +
+        0x6D => 0x56, // VK_SUBTRACT  → Numpad -
+        0x6E => 0x63, // VK_DECIMAL   → Numpad .
+        0x6F => 0x54, // VK_DIVIDE    → Numpad /
+        0x6C => 0x85, // VK_SEPARATOR → Numpad ,
+        // Tecla extra ABNT2 (entre Shift direito e Numpad /)
+        0xC1 => 0x64, // VK_ABNT_C1  → Non-US /|
+        0xC2 => 0x63, // VK_ABNT_C2  → Numpad . (ABNT2)
+        // Teclas de sistema / navegação
+        0x2C => 0x46, // VK_SNAPSHOT → Print Screen
+        0x91 => 0x47, // VK_SCROLL   → Scroll Lock
+        0x13 => 0x48, // VK_PAUSE
+        0x90 => 0x53, // VK_NUMLOCK
+        // F13-F24
+        0x7C => 0x68, // VK_F13
+        0x7D => 0x69, // VK_F14
+        0x7E => 0x6A, // VK_F15
+        0x7F => 0x6B, // VK_F16
+        0x80 => 0x6C, // VK_F17
+        0x81 => 0x6D, // VK_F18
+        0x82 => 0x6E, // VK_F19
+        0x83 => 0x6F, // VK_F20
+        0x84 => 0x70, // VK_F21
+        0x85 => 0x71, // VK_F22
+        0x86 => 0x72, // VK_F23
+        0x87 => 0x73, // VK_F24
         _ => return None,
     };
     Some(hid)
@@ -122,6 +160,34 @@ pub fn hid_to_vk(hid: u32) -> Option<u16> {
         0xE5 => 0xA1, // RShift
         0xE6 => 0xA5, // RAlt
         0xE7 => 0x5C, // RWin
+        // Numpad
+        0x53 => 0x90, // Num Lock
+        0x54 => 0x6F, // Numpad /
+        0x55 => 0x6A, // Numpad *
+        0x56 => 0x6D, // Numpad -
+        0x57 => 0x6B, // Numpad +
+        0x58 => 0x0D, // Numpad Enter
+        0x59 => 0x61, // Numpad 1
+        0x5A => 0x62, // Numpad 2
+        0x5B => 0x63, // Numpad 3
+        0x5C => 0x64, // Numpad 4
+        0x5D => 0x65, // Numpad 5
+        0x5E => 0x66, // Numpad 6
+        0x5F => 0x67, // Numpad 7
+        0x60 => 0x68, // Numpad 8
+        0x61 => 0x69, // Numpad 9
+        0x62 => 0x60, // Numpad 0
+        0x63 => 0x6E, // Numpad .
+        0x64 => 0xC1, // Non-US /| → VK_ABNT_C1
+        0x85 => 0x6C, // Numpad ,
+        // Teclas de sistema
+        0x46 => 0x2C, // Print Screen
+        0x47 => 0x91, // Scroll Lock
+        0x48 => 0x13, // Pause
+        // F13-F24
+        0x68 => 0x7C, 0x69 => 0x7D, 0x6A => 0x7E, 0x6B => 0x7F,
+        0x6C => 0x80, 0x6D => 0x81, 0x6E => 0x82, 0x6F => 0x83,
+        0x70 => 0x84, 0x71 => 0x85, 0x72 => 0x86, 0x73 => 0x87,
         _ => return None,
     };
     Some(vk)
@@ -213,6 +279,36 @@ pub fn mac_to_hid(mac: u32) -> Option<u32> {
         0x3C => 0xE5, // RShift
         0x3D => 0xE6, // RAlt
         0x36 => 0xE7, // RMeta
+        // Tecla ISO extra (§/± acima do Tab) → mesma posição que ABNT2 C1
+        0x0A => 0x64,
+        // Numpad
+        0x41 => 0x63, // kVK_ANSI_KeypadDecimal → Numpad .
+        0x43 => 0x55, // kVK_ANSI_KeypadMultiply
+        0x45 => 0x57, // kVK_ANSI_KeypadPlus
+        0x47 => 0x53, // kVK_ANSI_KeypadClear → Num Lock/Clear
+        0x4B => 0x54, // kVK_ANSI_KeypadDivide
+        0x4C => 0x58, // kVK_ANSI_KeypadEnter
+        0x4E => 0x56, // kVK_ANSI_KeypadMinus
+        0x51 => 0x67, // kVK_ANSI_KeypadEquals
+        0x52 => 0x62, // kVK_ANSI_Keypad0
+        0x53 => 0x59, // kVK_ANSI_Keypad1
+        0x54 => 0x5A, // kVK_ANSI_Keypad2
+        0x55 => 0x5B, // kVK_ANSI_Keypad3
+        0x56 => 0x5C, // kVK_ANSI_Keypad4
+        0x57 => 0x5D, // kVK_ANSI_Keypad5
+        0x58 => 0x5E, // kVK_ANSI_Keypad6
+        0x59 => 0x5F, // kVK_ANSI_Keypad7
+        0x5B => 0x60, // kVK_ANSI_Keypad8
+        0x5C => 0x61, // kVK_ANSI_Keypad9
+        // F13-F20
+        0x69 => 0x68, // F13
+        0x6B => 0x69, // F14
+        0x71 => 0x6A, // F15
+        0x6A => 0x6B, // F16
+        0x40 => 0x6C, // F17
+        0x4F => 0x6D, // F18
+        0x50 => 0x6E, // F19
+        0x5A => 0x6F, // F20
         _ => return None,
     };
     Some(hid)
@@ -304,6 +400,35 @@ pub fn hid_to_mac(hid: u32) -> Option<u16> {
         0xE5 => 0x3C, // RShift
         0xE6 => 0x3D, // RAlt
         0xE7 => 0x36, // RMeta
+        // Numpad
+        0x53 => 0x47, // Num Lock/Clear
+        0x54 => 0x4B, // Numpad /
+        0x55 => 0x43, // Numpad *
+        0x56 => 0x4E, // Numpad -
+        0x57 => 0x45, // Numpad +
+        0x58 => 0x4C, // Numpad Enter
+        0x59 => 0x53, // Numpad 1
+        0x5A => 0x54, // Numpad 2
+        0x5B => 0x55, // Numpad 3
+        0x5C => 0x56, // Numpad 4
+        0x5D => 0x57, // Numpad 5
+        0x5E => 0x58, // Numpad 6
+        0x5F => 0x59, // Numpad 7
+        0x60 => 0x5B, // Numpad 8
+        0x61 => 0x5C, // Numpad 9
+        0x62 => 0x52, // Numpad 0
+        0x63 => 0x41, // Numpad .
+        0x64 => 0x0A, // Non-US /| → kVK_ISO_Section
+        0x67 => 0x51, // Numpad =
+        // F13-F20
+        0x68 => 0x69, // F13
+        0x69 => 0x6B, // F14
+        0x6A => 0x71, // F15
+        0x6B => 0x6A, // F16
+        0x6C => 0x40, // F17
+        0x6D => 0x4F, // F18
+        0x6E => 0x50, // F19
+        0x6F => 0x5A, // F20
         _ => return None,
     };
     Some(mac)

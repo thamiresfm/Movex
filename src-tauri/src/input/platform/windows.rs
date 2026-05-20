@@ -547,14 +547,19 @@ impl InputInjector for WindowsInjector {
 
                 let mut inputs = vec![];
 
-                let mod_keys = [
-                    (Modifiers::SHIFT, 0x10u16),
-                    (Modifiers::CTRL,  0x11u16),
-                    (Modifiers::ALT,   0x12u16),
-                    (Modifiers::META,  0x5Bu16),
-                ];
-
+                // No key-down, pre-inject any modifier that should be held but may
+                // not be yet (belt-and-suspenders for packet reorder / first event).
+                // On key-up we do NOT release the modifiers here: they have their
+                // own KeyEvents and releasing them early causes "stuck modifier"
+                // symptoms (e.g. Ctrl still held on the source triggers premature
+                // Ctrl-up on the destination when any key is released).
                 if pressed {
+                    let mod_keys = [
+                        (Modifiers::SHIFT, 0x10u16),
+                        (Modifiers::CTRL,  0x11u16),
+                        (Modifiers::ALT,   0x12u16),
+                        (Modifiers::META,  0x5Bu16),
+                    ];
                     for (m, vk) in &mod_keys {
                         if modifiers.contains(*m) {
                             inputs.push(make_key_input(*vk, false));
@@ -563,15 +568,6 @@ impl InputInjector for WindowsInjector {
                 }
 
                 inputs.push(make_key_input(vk_main, !pressed));
-
-                if !pressed {
-                    for (m, vk) in &mod_keys {
-                        if modifiers.contains(*m) {
-                            inputs.push(make_key_input(*vk, true));
-                        }
-                    }
-                }
-
                 inputs
             }
         };

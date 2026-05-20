@@ -99,6 +99,7 @@ impl InputCapture for MacOsCapture {
                     CGEventType::ScrollWheel,
                     CGEventType::KeyDown,
                     CGEventType::KeyUp,
+                    CGEventType::FlagsChanged,       // modificadores (Shift/Ctrl/Alt/Cmd)
                 ],
                 move |_proxy, event_type, event| {
                     let is_locked = locked_c.lock().map(|g| *g).unwrap_or(false);
@@ -210,6 +211,33 @@ impl InputCapture for MacOsCapture {
                                 callback(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods });
                                 return None;
                             }
+                            // Modificadores (Shift/Ctrl/Alt/Cmd) geram FlagsChanged, não KeyDown/KeyUp.
+                            // Sem este handler ficam presos no `_ => {}` e executam localmente em vez
+                            // de serem encaminhados para o PC remoto.
+                            CGEventType::FlagsChanged => {
+                                use core_graphics::event::{EventField, CGEventFlags};
+                                let mac_kc = event.get_integer_value_field(
+                                    EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                                let Some(hid) = crate::input::keycodes::mac_to_hid(mac_kc) else {
+                                    return None;
+                                };
+                                let flags = event.get_flags();
+                                let mod_bit: u64 = match mac_kc {
+                                    0x38 | 0x3C => CGEventFlags::CGEventFlagShift.bits(),
+                                    0x3B | 0x3E => CGEventFlags::CGEventFlagControl.bits(),
+                                    0x3A | 0x3D => CGEventFlags::CGEventFlagAlternate.bits(),
+                                    0x37 | 0x36 => CGEventFlags::CGEventFlagCommand.bits(),
+                                    _ => { return None; }
+                                };
+                                let pressed = flags.bits() & mod_bit != 0;
+                                let mut mods = Modifiers::NONE;
+                                if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
+                                callback(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods });
+                                return None;
+                            }
                             _ => {}
                         }
                     }
@@ -256,6 +284,30 @@ impl InputCapture for MacOsCapture {
                             if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
                             if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
                             let pressed = matches!(event_type, CGEventType::KeyDown);
+                            Some(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods })
+                        }
+                        CGEventType::FlagsChanged => {
+                            use core_graphics::event::{EventField, CGEventFlags};
+                            let mac_kc = event.get_integer_value_field(
+                                EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                            let hid = match crate::input::keycodes::mac_to_hid(mac_kc) {
+                                Some(h) => h,
+                                None => return Some(event.to_owned()),
+                            };
+                            let flags = event.get_flags();
+                            let mod_bit: u64 = match mac_kc {
+                                0x38 | 0x3C => CGEventFlags::CGEventFlagShift.bits(),
+                                0x3B | 0x3E => CGEventFlags::CGEventFlagControl.bits(),
+                                0x3A | 0x3D => CGEventFlags::CGEventFlagAlternate.bits(),
+                                0x37 | 0x36 => CGEventFlags::CGEventFlagCommand.bits(),
+                                _ => return Some(event.to_owned()),
+                            };
+                            let pressed = flags.bits() & mod_bit != 0;
+                            let mut mods = Modifiers::NONE;
+                            if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
                             Some(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods })
                         }
                         _ => None,
