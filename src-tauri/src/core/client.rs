@@ -615,8 +615,13 @@ async fn run_session<S>(
                     }
                     Message::Input(event) => {
                         if !state.active_screen_remote.load(Ordering::Acquire) {
+                            // Cursor não está neste PC — descartar evento.
+                            // Ocorre durante a janela de race entre enviar LeaveScreen
+                            // e o servidor parar de encaminhar; sem este guard o evento
+                            // seria injetado no Mac enquanto o cursor está no Windows.
                             prev_in_return_strip = false;
                             client_return_peer_pos = None;
+                            continue;
                         } else if let InputEvent::MouseMove { x, y } = &event {
                             // Derivar borda de retorno automaticamente a partir da posição
                             // de entrada (primeiro MouseMove após EnterScreen).
@@ -677,7 +682,11 @@ async fn run_session<S>(
                                 "O outro PC está a enviar o mouse, mas o macOS está a bloquear a injeção. Abra Ajustes do Sistema → Privacidade e Segurança → Acessibilidade, ative Movex e feche/reabra o app.",
                             ).await;
                         }
-                        inject_event(event);
+                        // Só injetar se o cursor ainda está nesta máquina — impede
+                        // injeção do MouseMove de borda que disparou edge_enter=true.
+                        if state.active_screen_remote.load(Ordering::Acquire) {
+                            inject_event(event);
+                        }
                     }
                     ref msg @ Message::ClipboardData { .. } => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
