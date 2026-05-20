@@ -11,7 +11,7 @@
 
 | Documento | Descrição |
 |-----------|-----------|
-| [Guia de Configuração](docs/CONFIGURACAO.md) | Todos os campos do `config.json`, passo a passo, firewall, TLS, clipboard e resolução de problemas |
+| [Guia de Configuração](docs/CONFIGURACAO.md) | Todos os campos do `config.json`, passo a passo, permissões macOS/Windows, firewall, TLS, clipboard e resolução de problemas |
 | [Registro de Bugs](docs/bugs/BUGS.md) | Bugs conhecidos por versão e respetivo status |
 | [Modelo KVM & UX](docs/MODELO_KVM_E_UX.md) | Referência interna: comparação com Barrier/Deskflow e checklist de QA |
 
@@ -69,7 +69,36 @@ Baixe o instalador na página de [Releases](https://github.com/thamiresfm/Movex/
 3. Digite o mesmo servidor ou deixe descobrir automaticamente
 4. Use a mesma **Chave de Segurança**
 
-### 4. Use
+### 4. Conceda as permissões necessárias
+
+O Movex precisa de permissão do sistema para capturar e injetar mouse/teclado.  
+**Sem essas permissões o cursor não passa entre os computadores.**
+
+#### macOS
+
+| Permissão | Onde conceder | Necessária para |
+|-----------|--------------|----------------|
+| **Acessibilidade** | Ajustes do Sistema → Privacidade e Segurança → Acessibilidade → ativar Movex | Capturar mouse/teclado no Servidor e injetar eventos no Cliente |
+| **Monitorização de Entrada** | Ajustes do Sistema → Privacidade e Segurança → Monitorização de Entrada → ativar Movex | Capturar teclas globalmente (atalhos, tecla de bloqueio) |
+
+> **Depois de conceder:** feche e reabra o Movex para que as permissões entrem em vigor.  
+> **Após atualizar o app:** as permissões podem precisar ser reativadas (o macOS âncora a permissão ao binário).  
+> Se o botão «Corrigir» aparecer no painel, clique nele — ele redefine automaticamente a entrada TCC stale.
+
+#### Windows
+
+| Permissão | Como funciona |
+|-----------|--------------|
+| **Regras de Firewall** | Na 1.ª ligação como Servidor, o Movex solicita UAC para abrir a porta 24800. Aceite o prompt de Controlo de Conta de Utilizador. |
+| **Execução normal** | Não é necessário executar como Administrador no dia a dia — apenas o primeiro UAC do Firewall requer elevação. |
+
+> Se o prompt UAC não aparecer ou as regras não forem aplicadas: vá a **Configurações → Permissões → Aplicar regras no Firewall** dentro do Movex.
+
+Veja mais detalhes em [Guia de Configuração — Permissões do sistema](docs/CONFIGURACAO.md#14-permissões-do-sistema).
+
+---
+
+### 5. Use
 
 Mova o cursor para a **borda da tela** na direção do outro computador — o controle passa automaticamente.
 

@@ -229,7 +229,104 @@ Exemplo de configuração completa (Cliente):
 
 ---
 
-## 13. Resolução de problemas
+## 13. Permissões do sistema
+
+O Movex captura e injeta eventos de mouse e teclado ao nível do sistema operativo.
+Sem as permissões corretas, o cursor **não passa** entre os computadores mesmo com a conexão estabelecida.
+
+---
+
+### macOS
+
+O macOS exige consentimento explícito do utilizador para cada tipo de acesso privilegiado.
+
+#### Acessibilidade
+
+**Obrigatória** tanto no Servidor (captura de eventos) como no Cliente (injeção de eventos).
+
+| Passo | Ação |
+|-------|------|
+| 1 | Abrir **Ajustes do Sistema** |
+| 2 | Ir a **Privacidade e Segurança → Acessibilidade** |
+| 3 | Ativar o interruptor ao lado de **Movex** |
+| 4 | Se Movex não aparecer: clicar **+** e adicionar manualmente o app em `/Applications/Movex.app` |
+| 5 | **Fechar e reabrir o Movex** |
+
+> **Após atualizar o Movex:** o macOS âncora a permissão ao CD hash do binário. Depois de cada atualização, o toggle pode estar ON mas a permissão já não vale para o novo binário.  
+> → Use o botão **«Corrigir»** que aparece no painel do Movex (ou vá a Acessibilidade, desative e reative o Movex).
+
+#### Monitorização de Entrada *(Input Monitoring)*
+
+**Necessária no Servidor** para capturar teclas globalmente (incluindo a tecla de bloqueio `ScrollLock`).
+
+| Passo | Ação |
+|-------|------|
+| 1 | Abrir **Ajustes do Sistema** |
+| 2 | Ir a **Privacidade e Segurança → Monitorização de Entrada** |
+| 3 | Ativar o interruptor ao lado de **Movex** |
+| 4 | Fechar e reabrir o Movex |
+
+> Se o Movex não aparecer na lista, execute-o primeiro para que o macOS o detete.
+
+#### Resumo rápido — macOS
+
+```
+Servidor macOS:  Acessibilidade ✓  +  Monitorização de Entrada ✓
+Cliente macOS:   Acessibilidade ✓
+```
+
+---
+
+### Windows
+
+#### Regras de Firewall (Servidor)
+
+Na **primeira vez** que clicar em «Conectar» como Servidor, o Movex pede elevação (UAC) para criar regras no Firewall do Windows:
+
+| Regra criada | Detalhe |
+|-------------|---------|
+| Movex TCP 24800 | Entrada TCP na porta configurada |
+| Movex UDP 24800 | Entrada UDP na porta configurada |
+| Movex mDNS | Entrada UDP 5353 para descoberta automática |
+| Movex App In | Entrada pelo executável do Movex |
+| Movex App Out | Saída pelo executável do Movex |
+
+**O que fazer no prompt UAC:**
+1. Uma janela do Windows pergunta se permite que o PowerShell faça alterações no dispositivo
+2. Clique **Sim**
+3. As regras são criadas — nas próximas sessões não é necessário repetir
+
+> Se o prompt UAC não aparecer ou as regras não forem aplicadas:  
+> → **Configurações → Permissões → Aplicar regras no Firewall** (dentro do Movex)
+
+#### Execução normal
+
+O Movex **não precisa** ser executado como Administrador no dia a dia.  
+A elevação é solicitada apenas uma vez para as regras de Firewall.
+
+#### Verificar se as regras já existem
+
+Execute no Prompt de Comando (sem Admin):
+```cmd
+netsh advfirewall firewall show rule name="Movex App In"
+```
+Se a saída mostrar a regra, o Firewall está configurado corretamente.
+
+---
+
+### Sintomas de permissão em falta
+
+| Sintoma | Causa | Solução |
+|---------|-------|---------|
+| Conexão OK mas cursor não passa | Acessibilidade não concedida (macOS) | Ajustes do Sistema → Acessibilidade → ativar Movex |
+| Teclado não funciona no Mac remoto | Input Monitoring não concedida | Ajustes do Sistema → Monitorização de Entrada → ativar Movex |
+| Aviso «Permissão de Acessibilidade» no painel | Binário atualizado — TCC stale | Clicar «Corrigir» no painel do Movex |
+| Cliente não consegue ligar ao Servidor Windows | Firewall a bloquear porta 24800 | Configurações → Aplicar regras no Firewall (UAC) |
+| Prompt UAC não aparece ao clicar Conectar | UAC desativado ou política de grupo | Ir manualmente a Configurações → Aplicar regras no Firewall |
+
+---
+
+## 14. Resolução de problemas
 
 | Sintoma | Causa provável | Solução |
 |---------|---------------|---------|
