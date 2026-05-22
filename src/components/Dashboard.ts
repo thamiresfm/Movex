@@ -1403,6 +1403,13 @@ export async function renderDashboard(): Promise<void> {
   };
 
   const doDisconnect = async () => {
+    // Optimistic UI: immediately swap buttons so the user sees feedback before Rust responds
+    const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement | null;
+    const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement | null;
+    if (btnConnect && btnDisconnect) {
+      btnConnect.style.display = 'inline-flex';
+      btnDisconnect.style.display = 'none';
+    }
     await invoke('disconnect').catch(console.warn);
     addLog('Desconectado.', 'info');
   };

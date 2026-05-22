@@ -417,6 +417,10 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
                                 { *state.message_tx.lock().await = None; }
                             }
                             HandshakeResult::PskSynced => {
+                                if cancel.is_cancelled() {
+                                    connection_failed_client(&state).await;
+                                    return;
+                                }
                                 // PSK atualizado — reconectar imediatamente sem espera
                                 info!("PSK sincronizado — reconectando imediatamente");
                                 policy.reset();
@@ -502,7 +506,14 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
         let (attempt, wait) = policy.next_delay_with_attempt();
         {
             let mut status = state.connection_status.lock().await;
+            if cancel.is_cancelled() {
+                drop(status);
+                connection_failed_client(&state).await;
+                return;
+            }
             *status = ConnectionStatus::Reconnecting { attempt };
+        }
+        {
             let mut started = state.session_started_at.lock().await;
             *started = None;
         }
