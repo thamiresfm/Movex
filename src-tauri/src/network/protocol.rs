@@ -13,6 +13,10 @@ pub enum Message {
     Hello { version: u32, hostname: String, hmac: String },
     HelloAck { version: u32, hostname: String },
     HelloReject { reason: String },
+    /// Servidor detectou PSK errada mas TLS já está estabelecido; envia o PSK actual
+    /// para que o cliente se re-sincronize sem intervenção manual.
+    /// Só deve ser aceite pelo cliente se o certificado TLS do servidor já era confiável (TOFU).
+    HelloPskSync { new_psk_hex: String },
 
     // Input
     Input(InputEvent),

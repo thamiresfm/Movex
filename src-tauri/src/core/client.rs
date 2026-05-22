@@ -118,59 +118,81 @@ pub async fn connect_to_addr(
         }
     };
 
-    if let Some(observed_fp) = tofu_verifier.take_observed() {
+    let server_was_trusted = {
         let mut settings = state.settings.lock().await;
-        if settings.server_cert_fingerprint.is_none() {
-            settings.server_cert_fingerprint = Some(observed_fp);
-            let _ = settings.save();
+        let trusted = settings.server_cert_fingerprint.is_some();
+        if let Some(observed_fp) = tofu_verifier.take_observed() {
+            if settings.server_cert_fingerprint.is_none() {
+                settings.server_cert_fingerprint = Some(observed_fp);
+                let _ = settings.save();
+            }
         }
-    }
+        trusted
+    };
 
     let (screen_name, psk_hex) = {
         let s = state.settings.lock().await;
         (s.screen_name.clone(), s.psk_hex.clone())
     };
 
-    if let Ok(peer_hostname) = do_handshake(&mut tls, &screen_name, &psk_hex, &state, &cancel).await {
-        info!("Conectado (sessão) a: {}", peer_hostname);
-        {
-            let mut status = state.connection_status.lock().await;
-            *status = ConnectionStatus::Connected {
-                peer_hostname: peer_hostname.clone(),
-                peer_addr: target.clone(),
-                latency_ms: 0,
-            };
-            let mut started = state.session_started_at.lock().await;
-            *started = Some(std::time::Instant::now());
+    match do_handshake(&mut tls, &screen_name, &psk_hex, server_was_trusted, &state, &cancel).await {
+        HandshakeResult::Connected(peer_hostname) => {
+            info!("Conectado (sessão) a: {}", peer_hostname);
+            {
+                let mut status = state.connection_status.lock().await;
+                *status = ConnectionStatus::Connected {
+                    peer_hostname: peer_hostname.clone(),
+                    peer_addr: target.clone(),
+                    latency_ms: 0,
+                };
+                let mut started = state.session_started_at.lock().await;
+                *started = Some(std::time::Instant::now());
+            }
+            crate::ipc::emit_status_to_main(&state).await;
+            state
+                .user_visible_connection_success(&format!("Ligado a «{peer_hostname}» ({target})."))
+                .await;
+            let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
+            { *state.message_tx.lock().await = Some(msg_tx); }
+            run_session(&mut tls, state.clone(), &mut msg_rx, cancel).await;
+            { *state.message_tx.lock().await = None; }
         }
-        crate::ipc::emit_status_to_main(&state).await;
-        state
-            .user_visible_connection_success(&format!("Ligado a «{peer_hostname}» ({target})."))
-            .await;
-        let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
-        { *state.message_tx.lock().await = Some(msg_tx); }
-        run_session(&mut tls, state.clone(), &mut msg_rx, cancel).await;
-        { *state.message_tx.lock().await = None; }
-    } else {
-        state.user_visible_connection_error(
-            "Movex — Conexão",
-            "Handshake falhou: confira versão do Movex e rede (TLS).",
-        ).await;
-        connection_failed_client(&state).await;
+        HandshakeResult::PskSynced => {
+            // PSK atualizado — connect_to_addr não retenta, mas o próximo Conectar vai funcionar
+            connection_failed_client(&state).await;
+        }
+        HandshakeResult::Failed => {
+            state.user_visible_connection_error(
+                "Movex — Conexão",
+                "Handshake falhou: confira versão do Movex e rede (TLS).",
+            ).await;
+            connection_failed_client(&state).await;
+        }
     }
 
     { *state.session_server_addr.lock().await = None; }
 }
 
-/// Executa o handshake HMAC com o servidor e retorna o nome de ecrã do peer (servidor).
-/// Retorna `Err` para qualquer falha — o chamador decide se reconecta ou não.
+/// Resultado do handshake com três saídas possíveis.
+enum HandshakeResult {
+    /// Conectado com sucesso — hostname do peer.
+    Connected(String),
+    /// PSK foi auto-sincronizado; reconectar imediatamente com o novo PSK.
+    PskSynced,
+    /// Falha fatal — parar tentativas.
+    Failed,
+}
+
+/// Executa o handshake HMAC com o servidor.
+/// `server_was_trusted`: true se o certificado TLS do servidor já estava armazenado (TOFU).
 async fn do_handshake<S>(
     stream: &mut S,
     screen_name: &str,
     psk_hex: &str,
+    server_was_trusted: bool,
     state: &SharedState,
     cancel: &CancellationToken,
-) -> Result<String, ()>
+) -> HandshakeResult
 where
     S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin,
 {
@@ -178,12 +200,12 @@ where
         Ok(Message::ServerChallenge { version, server_nonce, .. }) => {
             if version != PROTOCOL_VERSION {
                 warn!("Versão incompatível do servidor");
-                return Err(());
+                return HandshakeResult::Failed;
             }
             server_nonce
         }
-        Ok(_) => { warn!("Esperava ServerChallenge"); return Err(()); }
-        Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); return Err(()); }
+        Ok(_) => { warn!("Esperava ServerChallenge"); return HandshakeResult::Failed; }
+        Err(e) => { warn!("Erro ao receber ServerChallenge: {}", e); return HandshakeResult::Failed; }
     };
 
     let hmac = match crate::core::auth::compute_hmac(psk_hex, &challenge) {
@@ -194,7 +216,7 @@ where
                 "Movex — Chave de segurança inválida",
                 "A chave de segurança (PSK) configurada não é hexadecimal válida. Regenere a chave nas Configurações.",
             ).await;
-            return Err(());
+            return HandshakeResult::Failed;
         }
     };
     if let Err(e) = send_message(stream, &Message::Hello {
@@ -203,7 +225,7 @@ where
         hmac,
     }).await {
         warn!("Erro ao enviar Hello: {}", e);
-        return Err(());
+        return HandshakeResult::Failed;
     }
 
     let first_msg = recv_message(stream).await;
@@ -215,19 +237,42 @@ where
                 let mut status = state.connection_status.lock().await;
                 *status = ConnectionStatus::Connecting;
             }
-            if cancel.is_cancelled() { return Err(()); }
+            if cancel.is_cancelled() { return HandshakeResult::Failed; }
             recv_message(stream).await
         }
         other => other,
     };
 
     match resolved {
+        Ok(Message::HelloPskSync { new_psk_hex }) => {
+            if server_was_trusted {
+                // Canal TLS já autenticado por TOFU — seguro receber o PSK pelo canal cifrado.
+                info!("PSK sync recebido do servidor confiável — atualizando e reconectando");
+                {
+                    let mut s = state.settings.lock().await;
+                    s.psk_hex = new_psk_hex;
+                    let _ = s.save();
+                }
+                state.log_to_connection_panel(
+                    "info",
+                    "PSK sincronizado automaticamente com o servidor — reconectando...",
+                ).await;
+                HandshakeResult::PskSynced
+            } else {
+                warn!("HelloPskSync recebido mas certificado do servidor não é confiável — ignorado por segurança");
+                state.user_visible_connection_error(
+                    "Movex — PSK incorreta",
+                    "Chave de segurança (PSK) incorreta. Configure o mesmo PSK nos dois PCs.",
+                ).await;
+                HandshakeResult::Failed
+            }
+        }
         Ok(Message::HelloReject { reason }) => {
             warn!("Servidor rejeitou o handshake: {}", reason);
             state
                 .user_visible_connection_error("Movex — Nome do ecrã", &reason)
                 .await;
-            Err(())
+            HandshakeResult::Failed
         }
         Ok(Message::ConnectionRejected { reason }) => {
             warn!("Conexão rejeitada pelo servidor: {}", reason);
@@ -238,28 +283,28 @@ where
                 let mut status = state.connection_status.lock().await;
                 *status = ConnectionStatus::Disconnected;
             }
-            Err(())
+            HandshakeResult::Failed
         }
-        Ok(Message::HelloAck { hostname: peer, .. }) => Ok(peer),
+        Ok(Message::HelloAck { hostname: peer, .. }) => HandshakeResult::Connected(peer),
         Ok(Message::ConnectionApproved) => {
             info!("Conexão aprovada pelo servidor!");
             match recv_message(stream).await {
-                Ok(Message::HelloAck { hostname: peer, .. }) => Ok(peer),
+                Ok(Message::HelloAck { hostname: peer, .. }) => HandshakeResult::Connected(peer),
                 Ok(Message::HelloReject { reason }) => {
                     warn!("Rejeitado após aprovação: {}", reason);
-                    Err(())
+                    HandshakeResult::Failed
                 }
-                Ok(_) => { warn!("Esperava HelloAck após aprovação"); Err(()) }
-                Err(e) => { warn!("Erro ao receber HelloAck: {}", e); Err(()) }
+                Ok(_) => { warn!("Esperava HelloAck após aprovação"); HandshakeResult::Failed }
+                Err(e) => { warn!("Erro ao receber HelloAck: {}", e); HandshakeResult::Failed }
             }
         }
         Ok(other) => {
             warn!("Mensagem inesperada durante handshake: {:?}", other);
-            Err(())
+            HandshakeResult::Failed
         }
         Err(e) => {
             warn!("Erro durante handshake: {}", e);
-            Err(())
+            HandshakeResult::Failed
         }
     }
 }
@@ -327,56 +372,67 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
 
                 match connector.connect(domain, tcp).await {
                     Ok(mut tls) => {
-                        if let Some(observed_fp) = tofu_verifier.take_observed() {
+                        let server_was_trusted = {
                             let mut settings = state.settings.lock().await;
-                            if settings.server_cert_fingerprint.is_none() {
-                                info!("TOFU: gravando fingerprint do servidor");
-                                settings.server_cert_fingerprint = Some(observed_fp);
-                                let _ = settings.save();
+                            let trusted = settings.server_cert_fingerprint.is_some();
+                            if let Some(observed_fp) = tofu_verifier.take_observed() {
+                                if settings.server_cert_fingerprint.is_none() {
+                                    info!("TOFU: gravando fingerprint do servidor");
+                                    settings.server_cert_fingerprint = Some(observed_fp);
+                                    let _ = settings.save();
+                                }
                             }
-                        }
+                            trusted
+                        };
 
                         let (screen_name, psk_hex) = {
                             let s = state.settings.lock().await;
                             (s.screen_name.clone(), s.psk_hex.clone())
                         };
 
-                        if let Ok(peer_hostname) =
-                            do_handshake(&mut tls, &screen_name, &psk_hex, &state, &cancel).await
-                        {
-                            info!("Conectado ao servidor: {}", peer_hostname);
+                        match do_handshake(&mut tls, &screen_name, &psk_hex, server_was_trusted, &state, &cancel).await {
+                            HandshakeResult::Connected(peer_hostname) => {
+                                info!("Conectado ao servidor: {}", peer_hostname);
                                 policy.reset();
                                 {
                                     let mut status = state.connection_status.lock().await;
                                     *status = ConnectionStatus::Connected {
-                                    peer_hostname: peer_hostname.clone(),
-                                    peer_addr: addr.clone(),
+                                        peer_hostname: peer_hostname.clone(),
+                                        peer_addr: addr.clone(),
                                         latency_ms: 0,
                                     };
-                                let mut started = state.session_started_at.lock().await;
-                                *started = Some(std::time::Instant::now());
-                            }
-                            crate::ipc::emit_status_to_main(&state).await;
-                            state
-                                .user_visible_connection_success(&format!(
-                                    "Ligado ao servidor «{peer_hostname}» ({addr})."
-                                ))
-                                .await;
+                                    let mut started = state.session_started_at.lock().await;
+                                    *started = Some(std::time::Instant::now());
+                                }
+                                crate::ipc::emit_status_to_main(&state).await;
+                                state
+                                    .user_visible_connection_success(&format!(
+                                        "Ligado ao servidor «{peer_hostname}» ({addr})."
+                                    ))
+                                    .await;
 
-                            let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
-                            { *state.message_tx.lock().await = Some(msg_tx); }
-                            run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
-                            { *state.message_tx.lock().await = None; }
-                        } else {
-                            warn!("Handshake falhou — verifique filtro de nome de ecrã e versão do Movex");
-                            state
-                                .user_visible_connection_error(
-                                    "Movex",
-                                    "Handshake falhou: verifique filtro de nome de ecrã no servidor e mesma versão do app.",
-                                )
-                                .await;
-                            connection_failed_client(&state).await;
-                            return;
+                                let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
+                                { *state.message_tx.lock().await = Some(msg_tx); }
+                                run_session(&mut tls, state.clone(), &mut msg_rx, cancel.clone()).await;
+                                { *state.message_tx.lock().await = None; }
+                            }
+                            HandshakeResult::PskSynced => {
+                                // PSK atualizado — reconectar imediatamente sem espera
+                                info!("PSK sincronizado — reconectando imediatamente");
+                                policy.reset();
+                                continue;
+                            }
+                            HandshakeResult::Failed => {
+                                warn!("Handshake falhou — verifique filtro de nome de ecrã e versão do Movex");
+                                state
+                                    .user_visible_connection_error(
+                                        "Movex",
+                                        "Handshake falhou: verifique filtro de nome de ecrã no servidor e mesma versão do app.",
+                                    )
+                                    .await;
+                                connection_failed_client(&state).await;
+                                return;
+                            }
                         }
                     }
                     Err(e) => {
