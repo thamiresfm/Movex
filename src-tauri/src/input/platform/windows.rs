@@ -191,9 +191,13 @@ impl InputCapture for WindowsCapture {
                                     return CallNextHookEx(None, n_code, w_param, l_param);
                                 }
 
-                                // Acumular delta normalizado na posição virtual remota
+                                // Acumular delta normalizado na posição virtual remota.
+                                // Dividir por metade da bbox (não pela largura total): o cursor
+                                // está no centro do servidor, e só tem "metade" do ecrã disponível
+                                // em cada direção. Normalizar por bbox_w dava virt_pos_max=0.5 para
+                                // um monitor 1920×1080 → cursor do remoto ficava preso no meio do ecrã.
                                 let (vx, vy) = virt_pos_load();
-                                let (nw, nh) = (w as f32, h as f32);
+                                let (nw, nh) = (w as f32 * 0.5, h as f32 * 0.5);
                                 let new_vx = (vx + dx / nw).clamp(0.0, 1.0);
                                 let new_vy = (vy + dy / nh).clamp(0.0, 1.0);
                                 virt_pos_store(new_vx, new_vy);
