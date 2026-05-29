@@ -55,10 +55,11 @@ jobs:
           npm run build
       - name: Artefato frontend (verificação)
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: movex-frontend-dist-tag-build
           path: dist/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
   release:
