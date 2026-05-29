@@ -20,7 +20,7 @@ pub fn inject_event(event: InputEvent) {
 
 /// Actualiza a sensibilidade do cursor para o lado receptor.
 /// Chamado na inicialização a partir das Settings.
-pub fn set_mouse_sensitivity(s: f64) {
+pub fn set_mouse_sensitivity(_s: f64) {
     #[cfg(target_os = "macos")]
-    crate::input::platform::macos::set_sensitivity(s as f32);
+    crate::input::platform::macos::set_sensitivity(_s as f32);
 }

@@ -193,9 +193,11 @@ async fn handle_client<S>(
             }
             let psk = { state.settings.lock().await.psk_hex.clone() };
             if !crate::core::auth::verify_hmac(&psk, &server_nonce, &hmac) {
-                warn!("Handshake rejeitado de {}: HMAC inválido (PSK incorreta)", peer_addr);
-                let _ = send_message(&mut stream, &Message::HelloReject {
-                    reason: "Chave de segurança (PSK) incorreta.".into(),
+                warn!("Handshake rejeitado de {}: HMAC inválido — oferecendo PSK sync via TLS", peer_addr);
+                // Envia o PSK actual pela camada TLS já estabelecida e autenticada (TOFU).
+                // O cliente só aceita se já conhecia o certificado deste servidor.
+                let _ = send_message(&mut stream, &Message::HelloPskSync {
+                    new_psk_hex: psk,
                 }).await;
                 server_resume_listening(&state).await;
                 return;

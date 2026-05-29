@@ -170,10 +170,13 @@ impl InputCapture for MacOsCapture {
                                 }
 
                                 // Acumular delta normalizado na posição virtual remota.
+                                // Dividir por metade da bbox: o cursor está no centro do servidor,
+                                // com apenas metade do ecrã disponível em cada direção.
+                                // Usar bbox_w inteiro dava virt_pos_max=0.5 (parede no meio do ecrã remoto).
                                 let (vx, vy) = {
                                     let mut vp = virt_pos_c.lock().unwrap_or_else(|p| p.into_inner());
-                                    vp.0 = (vp.0 + dx / w_nonempty).clamp(0.0, 1.0);
-                                    vp.1 = (vp.1 + dy / h_nonempty).clamp(0.0, 1.0);
+                                    vp.0 = (vp.0 + dx / (w_nonempty * 0.5)).clamp(0.0, 1.0);
+                                    vp.1 = (vp.1 + dy / (h_nonempty * 0.5)).clamp(0.0, 1.0);
                                     *vp
                                 };
                                 callback(InputEvent::MouseMove { x: vx, y: vy });
