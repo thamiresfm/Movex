@@ -95,6 +95,7 @@ pub async fn update_preferences(
     lock_key: String,
     clipboard_sync_enabled: bool,
     theme: String,
+    mouse_sensitivity: Option<f64>,
 ) -> Result<(), String> {
     // Validar formato do atalho antes de persistir — evitar estado inconsistente
     if lock_key.trim().is_empty() {
@@ -140,6 +141,11 @@ pub async fn update_preferences(
         s.lock_key = lock_key;
         s.clipboard_sync_enabled = clipboard_sync_enabled;
         s.theme = theme;
+        if let Some(sens) = mouse_sensitivity {
+            let clamped = sens.clamp(0.1, 5.0);
+            s.mouse_sensitivity = clamped;
+            crate::input::inject::set_mouse_sensitivity(clamped);
+        }
         s.save()?;
     }
 

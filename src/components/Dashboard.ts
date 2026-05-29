@@ -509,6 +509,22 @@ export async function renderDashboard(): Promise<void> {
               </div>
             </div>
 
+            <!-- Sensibilidade do cursor (só relevante no macOS como cliente) -->
+            <div class="card" style="margin-bottom:14px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <div>
+                  <div style="font-size:13px;font-weight:600;color:var(--text);">🖱️ Sensibilidade do cursor</div>
+                  <div style="font-size:11px;color:var(--text-3);">Ajuste se o cursor parecer pesado ou rápido demais neste ecrã</div>
+                </div>
+                <span id="mouseSensLabel" style="font-size:14px;font-weight:700;color:var(--cyan);min-width:36px;text-align:right;">1.2×</span>
+              </div>
+              <input id="mouseSensInput" type="range" min="0.5" max="3.0" step="0.1" value="1.2"
+                style="width:100%;accent-color:var(--cyan);cursor:pointer;" />
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-top:2px;">
+                <span>0.5×</span><span>lento ← → rápido</span><span>3.0×</span>
+              </div>
+            </div>
+
             <!-- Permissões do SO (atalhos para Definições) -->
             <div class="card" style="margin-bottom:14px;" id="permCard">
               <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px;">🔐 Permissões do sistema</div>
@@ -909,6 +925,11 @@ export async function renderDashboard(): Promise<void> {
       if (notifEl) notifEl.checked = s.notifications_enabled ?? true;
       const clipEl = document.getElementById('clipboardToggle') as HTMLInputElement;
       if (clipEl) clipEl.checked = s.clipboard_sync_enabled ?? true;
+      const sensInput = document.getElementById('mouseSensInput') as HTMLInputElement | null;
+      const sensLabel = document.getElementById('mouseSensLabel');
+      const sensVal = (s.mouse_sensitivity ?? 1.2).toFixed(1);
+      if (sensInput) sensInput.value = sensVal;
+      if (sensLabel) sensLabel.textContent = sensVal + '×';
 
       const lockKeyEl = document.getElementById('lockKeyDisplay');
       const lockKeyInput = document.getElementById('lockKeyInput') as HTMLInputElement;
@@ -1059,12 +1080,15 @@ export async function renderDashboard(): Promise<void> {
     const clipboard = (document.getElementById('clipboardToggle') as HTMLInputElement)?.checked ?? true;
     const lockKey =
       (document.getElementById('lockKeyInput') as HTMLInputElement)?.value?.trim() || 'ctrl+alt+l';
+    const mouseSensitivity =
+      parseFloat((document.getElementById('mouseSensInput') as HTMLInputElement)?.value ?? '1.2') || 1.2;
     try {
       await invoke('update_preferences', {
         notificationsEnabled: notif,
         lockKey,
         clipboardSyncEnabled: clipboard,
         theme,
+        mouseSensitivity,
       });
       const s = await invoke<any>('get_settings');
       const screenName =
@@ -1403,6 +1427,13 @@ export async function renderDashboard(): Promise<void> {
   };
 
   const doDisconnect = async () => {
+    // Optimistic UI: immediately swap buttons so the user sees feedback before Rust responds
+    const btnConnect = document.getElementById('btnConnect') as HTMLButtonElement | null;
+    const btnDisconnect = document.getElementById('btnDisconnect') as HTMLButtonElement | null;
+    if (btnConnect && btnDisconnect) {
+      btnConnect.style.display = 'inline-flex';
+      btnDisconnect.style.display = 'none';
+    }
     await invoke('disconnect').catch(console.warn);
     addLog('Desconectado.', 'info');
   };
@@ -1672,6 +1703,13 @@ export async function renderDashboard(): Promise<void> {
   on('btnAddMachine',      addNewMachine);
   on('btnDiagReport',      () => addLog('Relatório completo: em desenvolvimento (use os logs abaixo para diagnóstico).', 'info'));
   on('btnDiagRestart',     () => addLog('Reinício de diagnósticos: apenas registo no log (sem ação no sistema).', 'info'));
+
+  // Actualizar label em tempo real ao arrastar o slider
+  document.getElementById('mouseSensInput')?.addEventListener('input', (e) => {
+    const v = parseFloat((e.target as HTMLInputElement).value).toFixed(1);
+    const lbl = document.getElementById('mouseSensLabel');
+    if (lbl) lbl.textContent = v + '×';
+  });
 
   // Cards de papel (servidor/cliente) — usar referência direta
   document.querySelectorAll('[data-role]').forEach(el => {
