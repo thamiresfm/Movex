@@ -86,7 +86,7 @@ jobs:
           path: dist/
           if-no-files-found: error
           compression-level: 6
-          retention-days: 30
+          retention-days: 7
 
       - name: Resumo (CI vs Release)
         if: success()
