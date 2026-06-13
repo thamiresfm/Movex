@@ -135,11 +135,18 @@ pub struct TofuVerifier {
     known: Option<String>,
     /// Fingerprint observado durante o handshake (gravado para persistência)
     pub observed: std::sync::Mutex<Option<String>>,
+    /// Algoritmos de verificação de assinatura do provider (cacheados — evita
+    /// reconstruir o CryptoProvider a cada chamada durante o handshake).
+    sig_algs: rustls::crypto::WebPkiSupportedAlgorithms,
 }
 
 impl TofuVerifier {
     pub fn new(known: Option<String>) -> Self {
-        Self { known, observed: std::sync::Mutex::new(None) }
+        Self {
+            known,
+            observed: std::sync::Mutex::new(None),
+            sig_algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        }
     }
 
     /// Retorna o fingerprint observado após o handshake (para persistir em settings)
@@ -183,30 +190,41 @@ impl rustls::client::danger::ServerCertVerifier for TofuVerifier {
         }
     }
 
+    // A verificação da ASSINATURA do handshake é delegada ao provider ring
+    // (instalado como default em lib.rs). Isso garante que o servidor realmente
+    // possui a chave privada correspondente ao certificado apresentado — sem isso,
+    // um MITM poderia reapresentar o cert público e o pinning seria inútil.
+    // O pinning de fingerprint (TOFU) continua sendo feito em verify_server_cert.
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.sig_algs,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.sig_algs,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
+        self.sig_algs.supported_schemes()
     }
 }
 
@@ -219,6 +237,20 @@ pub async fn send_message<W: AsyncWriteExt + Unpin>(
     let bytes = msg.encode()?;
     stream.write_all(&bytes).await?;
     debug!("Mensagem enviada: {} bytes", bytes.len());
+    Ok(bytes.len())
+}
+
+/// Como `send_message`, mas força o flush do stream — use para mensagens
+/// críticas (HelloAck, HelloReject, HelloPskSync, Disconnect, Ping, Pong) que
+/// precisam chegar imediatamente, inclusive antes de fechar a conexão.
+pub async fn send_message_flushed<W: AsyncWriteExt + Unpin>(
+    stream: &mut W,
+    msg: &Message,
+) -> Result<usize, TransportError> {
+    let bytes = msg.encode()?;
+    stream.write_all(&bytes).await?;
+    stream.flush().await?;
+    debug!("Mensagem enviada (flushed): {} bytes", bytes.len());
     Ok(bytes.len())
 }
 

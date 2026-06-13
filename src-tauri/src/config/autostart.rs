@@ -16,10 +16,20 @@ pub fn disable() -> Result<(), String> {
     Err("Plataforma não suportada para autostart".to_string())
 }
 
+/// Escapa os caracteres especiais de XML para interpolar com segurança em
+/// `<string>...</string>` do plist (ex.: caminhos com & < >).
+#[cfg(target_os = "macos")]
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(target_os = "macos")]
 fn enable_macos() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let home = dirs::home_dir().ok_or_else(|| "Diretório home não encontrado".to_string())?;
+    let exe_escaped = escape_xml(&exe.to_string_lossy());
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -32,7 +42,7 @@ fn enable_macos() -> Result<(), String> {
     <key>KeepAlive</key><false/>
 </dict>
 </plist>"#,
-        exe.display()
+        exe_escaped
     );
     let agents_dir = home.join("Library/LaunchAgents");
     std::fs::create_dir_all(&agents_dir).map_err(|e| e.to_string())?;
@@ -59,7 +69,14 @@ fn enable_windows() -> Result<(), String> {
     use winreg::RegKey;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_str = exe.to_string_lossy().to_string();
+    let raw = exe.to_string_lossy().to_string();
+    // Se o caminho contiver espaços, deve ir entre aspas para o Windows
+    // interpretar corretamente o executável na chave Run.
+    let exe_str = if raw.contains(' ') && !raw.starts_with('"') {
+        format!("\"{}\"", raw)
+    } else {
+        raw
+    };
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let run_key = hkcu
@@ -73,7 +90,10 @@ fn enable_windows() -> Result<(), String> {
         .set_value("Movex", &exe_str)
         .map_err(|e| format!("Falha ao definir valor de autostart: {}", e))?;
 
-    tracing::info!("Autostart ativado (Windows Registry via winreg): {}", exe_str);
+    tracing::info!(
+        "Autostart ativado (Windows Registry via winreg): {}",
+        exe_str
+    );
     Ok(())
 }
 

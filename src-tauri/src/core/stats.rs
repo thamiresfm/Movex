@@ -12,22 +12,33 @@ pub struct SessionStats {
 }
 
 impl SessionStats {
-    pub fn add_sent(&self, bytes: u64)     { self.bytes_sent.fetch_add(bytes, Ordering::Relaxed); }
-    pub fn add_received(&self, bytes: u64) { self.bytes_received.fetch_add(bytes, Ordering::Relaxed); }
-    pub fn inc_event_sent(&self)           { self.events_sent.fetch_add(1, Ordering::Relaxed); }
-    #[allow(dead_code)]
-    pub fn inc_event_received(&self)       { self.events_received.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_file_sent(&self)            { self.files_sent.fetch_add(1, Ordering::Relaxed); }
-    pub fn inc_file_received(&self)        { self.files_received.fetch_add(1, Ordering::Relaxed); }
+    pub fn add_sent(&self, bytes: u64) {
+        self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+    }
+    pub fn add_received(&self, bytes: u64) {
+        self.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+    }
+    pub fn inc_event_sent(&self) {
+        self.events_sent.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_event_received(&self) {
+        self.events_received.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_file_sent(&self) {
+        self.files_sent.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_file_received(&self) {
+        self.files_received.fetch_add(1, Ordering::Relaxed);
+    }
 
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
-            bytes_sent:      self.bytes_sent.load(Ordering::Relaxed),
-            bytes_received:  self.bytes_received.load(Ordering::Relaxed),
-            events_sent:     self.events_sent.load(Ordering::Relaxed),
+            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
+            bytes_received: self.bytes_received.load(Ordering::Relaxed),
+            events_sent: self.events_sent.load(Ordering::Relaxed),
             events_received: self.events_received.load(Ordering::Relaxed),
-            files_sent:      self.files_sent.load(Ordering::Relaxed),
-            files_received:  self.files_received.load(Ordering::Relaxed),
+            files_sent: self.files_sent.load(Ordering::Relaxed),
+            files_received: self.files_received.load(Ordering::Relaxed),
         }
     }
 
@@ -63,7 +74,10 @@ pub fn get_primary_screen_size() -> (u32, u32) {
 pub fn get_primary_screen_size() -> (u32, u32) {
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-        (GetSystemMetrics(SM_CXSCREEN) as u32, GetSystemMetrics(SM_CYSCREEN) as u32)
+        (
+            GetSystemMetrics(SM_CXSCREEN) as u32,
+            GetSystemMetrics(SM_CYSCREEN) as u32,
+        )
     }
 }
 
@@ -71,4 +85,3 @@ pub fn get_primary_screen_size() -> (u32, u32) {
 pub fn get_primary_screen_size() -> (u32, u32) {
     (1920, 1080)
 }
-

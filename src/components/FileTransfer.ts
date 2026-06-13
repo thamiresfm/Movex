@@ -65,7 +65,9 @@ export async function initFileTransfer(): Promise<void> {
     const o = getOverlay();
     if (o) o.style.display = 'none';
     const files = Array.from((e as DragEvent).dataTransfer?.files ?? []);
-    const paths = files.map(f => (f as any).path ?? '').filter(Boolean);
+    // `File.path` não existe no padrão WebView; o caminho real chega pelo
+    // evento nativo `onDragDropEvent` do Tauri. Tratamos como opcional aqui.
+    const paths = files.map(f => (f as File & { path?: string }).path ?? '').filter(Boolean);
     if (paths.length) await sendFiles(paths);
   };
 

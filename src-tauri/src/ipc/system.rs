@@ -73,17 +73,24 @@ pub async fn diagnose_connection(state: State<'_, SharedState>) -> Result<Diagno
         .collect();
 
     // TCP probe ao server_addr configurado (se houver).
+    // Validar entrada antes de conectar: addr não vazio / sem espaços internos e port != 0.
     let (tcp_reachable, tcp_error) = if let Some(addr) = server_addr_opt.as_ref() {
-        let target = format!("{}:{}", addr.trim(), port);
-        let connect = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            tokio::net::TcpStream::connect(&target),
-        )
-        .await;
-        match connect {
-            Ok(Ok(_)) => (Some(true), None),
-            Ok(Err(e)) => (Some(false), Some(format!("TCP: {}", e))),
-            Err(_) => (Some(false), Some("TCP: timeout (3s)".to_string())),
+        let addr_trim = addr.trim();
+        if port == 0 || addr_trim.is_empty() || addr_trim.split_whitespace().count() != 1 {
+            tracing::warn!("diagnose_connection: server_addr/port inválido — sem probe TCP");
+            (Some(false), Some("TCP: entrada inválida (endereço ou porta)".to_string()))
+        } else {
+            let target = format!("{}:{}", addr_trim, port);
+            let connect = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                tokio::net::TcpStream::connect(&target),
+            )
+            .await;
+            match connect {
+                Ok(Ok(_)) => (Some(true), None),
+                Ok(Err(e)) => (Some(false), Some(format!("TCP: {}", e))),
+                Err(_) => (Some(false), Some("TCP: timeout (3s)".to_string())),
+            }
         }
     } else {
         (None, Some("server_addr não configurado".to_string()))

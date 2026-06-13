@@ -13,13 +13,12 @@
 /// 2. `mouse_proc` locked: `dx = pt.x - prev_x`, depois `prev = center`, depois warp.
 ///    O próximo evento sintético tem `dx = 0` → skip automático.
 /// 3. Filtro "bogus zone": descartar deltas > 45% da largura/altura.
-
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::OnceLock;
 use tracing::{error, info};
 
-use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
+use crate::input::events::{InputEvent, Modifiers, MouseButton};
 
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync + 'static>;
 
@@ -106,6 +105,33 @@ fn virt_pos_store(x: f32, y: f32) {
     WIN_VIRT_Y_BITS.store(y.to_bits(), Ordering::Release);
 }
 
+/// Sensibilidade do cursor no modo remoto (bits de f32; default 1.2 = 0x3F99_999A,
+/// igual ao macOS e ao default da config). Sempre sobrescrita no arranque por
+/// `set_mouse_sensitivity` (lib.rs); o default só vale antes da 1.ª chamada.
+///
+/// NOTA multiplataforma: no Windows a sensibilidade é aplicada no lado da CAPTURA
+/// (escala o delta enviado), pois o injetor Windows usa posicionamento ABSOLUTO
+/// (sem delta a escalar no receptor). No macOS é aplicada no injetor. O efeito
+/// prático é equivalente: escala a velocidade do cursor no ecrã remoto.
+static MOUSE_SENS_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x3F99_999A);
+
+/// Define a sensibilidade do cursor (clamp 0.1..=5.0). Chamada por `inject.rs` ao
+/// inicializar e ao salvar a configuração.
+pub fn set_sensitivity(s: f32) {
+    let v = if s.is_finite() && s > 0.0 {
+        s.clamp(0.1, 5.0)
+    } else {
+        1.0
+    };
+    MOUSE_SENS_BITS.store(v.to_bits(), Ordering::Release);
+}
+
+#[inline]
+fn mouse_sens() -> f32 {
+    f32::from_bits(MOUSE_SENS_BITS.load(Ordering::Acquire))
+}
+
 // ── WindowsCapture ────────────────────────────────────────────────────────────
 
 pub struct WindowsCapture {
@@ -114,15 +140,31 @@ pub struct WindowsCapture {
 
 impl WindowsCapture {
     pub fn new() -> Self {
-        Self { running: std::sync::Arc::new(AtomicBool::new(false)) }
+        Self {
+            running: std::sync::Arc::new(AtomicBool::new(false)),
+        }
     }
 }
 
 impl InputCapture for WindowsCapture {
-    fn start(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync + 'static>) -> Result<(), String> {
+    fn start(
+        &self,
+        callback: Box<dyn Fn(InputEvent) + Send + Sync + 'static>,
+    ) -> Result<(), String> {
         if self.running.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+
+        // Resetar estado global de bloqueio do cursor: WIN_CURSOR_LOCKED é um
+        // AtomicBool static que sobrevive ao fim da sessão anterior. Se a sessão
+        // anterior morreu por panic sem chamar unlock_cursor(), o flag fica `true`
+        // e a nova captura inicia "presa" (suprime o movimento local e faz warp ao
+        // centro). Limpar aqui garante que a captura começa sempre no modo local.
+        WIN_CURSOR_LOCKED.store(false, Ordering::Release);
+        // O pre-lock também pode estar marcado como válido de uma sessão anterior;
+        // invalidá-lo evita que um unlock_cursor futuro restaure o cursor para uma
+        // posição obsoleta.
+        WIN_PRE_LOCK_VALID.store(false, Ordering::Release);
 
         let running = std::sync::Arc::clone(&self.running);
         set_hook_cb(Some(std::sync::Arc::new(callback)));
@@ -133,14 +175,13 @@ impl InputCapture for WindowsCapture {
         let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
         std::thread::spawn(move || {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SetWindowsHookExW, UnhookWindowsHookEx,
-                WH_MOUSE_LL, WH_KEYBOARD_LL, MSG, HC_ACTION,
-            };
-            use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
+            use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             use windows::Win32::UI::Input::KeyboardAndMouse::{
-                VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN,
+                VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+            };
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL,
             };
 
             unsafe extern "system" fn mouse_proc(
@@ -149,10 +190,16 @@ impl InputCapture for WindowsCapture {
                 l_param: LPARAM,
             ) -> LRESULT {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    CallNextHookEx, MSLLHOOKSTRUCT,
-                    WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEWHEEL,
+                    CallNextHookEx, MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+                    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN,
+                    WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
                 };
+                // HIWORD(mouseData) distingue os botões X: XBUTTON1=Button4, XBUTTON2=Button5.
+                // Usamos as constantes literais (0x0001/0x0002) coerentes com a leitura por
+                // deslocamento de bits já praticada para a roda (`data.mouseData >> 16`),
+                // evitando depender da tipagem exacta das constantes XBUTTON* da crate.
+                const XBUTTON1: u16 = 0x0001;
+                const XBUTTON2: u16 = 0x0002;
 
                 if n_code == HC_ACTION as i32 {
                     let data = &*(l_param.0 as *const MSLLHOOKSTRUCT);
@@ -186,7 +233,8 @@ impl InputCapture for WindowsCapture {
 
                                 // Filtro bogus + normalização do delta: usar o rect virtual completo,
                                 // coerente com `check_boundary` no servidor (`ScreenLayout` bbox).
-                                let (_, _, w, h) = crate::screen::layout::desktop_bounding_box_cached();
+                                let (_, _, w, h) =
+                                    crate::screen::layout::desktop_bounding_box_cached();
                                 if dx.abs() > w as f32 * 0.45 || dy.abs() > h as f32 * 0.45 {
                                     return CallNextHookEx(None, n_code, w_param, l_param);
                                 }
@@ -198,24 +246,78 @@ impl InputCapture for WindowsCapture {
                                 // um monitor 1920×1080 → cursor do remoto ficava preso no meio do ecrã.
                                 let (vx, vy) = virt_pos_load();
                                 let (nw, nh) = (w as f32 * 0.5, h as f32 * 0.5);
-                                let new_vx = (vx + dx / nw).clamp(0.0, 1.0);
-                                let new_vy = (vy + dy / nh).clamp(0.0, 1.0);
+                                let sens = mouse_sens();
+                                let new_vx = (vx + (dx * sens) / nw).clamp(0.0, 1.0);
+                                let new_vy = (vy + (dy * sens) / nh).clamp(0.0, 1.0);
                                 virt_pos_store(new_vx, new_vy);
 
-                                Some(InputEvent::MouseMove { x: new_vx, y: new_vy })
+                                Some(InputEvent::MouseMove {
+                                    x: new_vx,
+                                    y: new_vy,
+                                })
                             }
                             v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {
-                                button: MouseButton::Left, pressed: true,
+                                button: MouseButton::Left,
+                                pressed: true,
                             }),
                             v if v == WM_LBUTTONUP => Some(InputEvent::MouseButton {
-                                button: MouseButton::Left, pressed: false,
+                                button: MouseButton::Left,
+                                pressed: false,
                             }),
                             v if v == WM_RBUTTONDOWN => Some(InputEvent::MouseButton {
-                                button: MouseButton::Right, pressed: true,
+                                button: MouseButton::Right,
+                                pressed: true,
                             }),
                             v if v == WM_RBUTTONUP => Some(InputEvent::MouseButton {
-                                button: MouseButton::Right, pressed: false,
+                                button: MouseButton::Right,
+                                pressed: false,
                             }),
+                            v if v == WM_MBUTTONDOWN => Some(InputEvent::MouseButton {
+                                button: MouseButton::Middle,
+                                pressed: true,
+                            }),
+                            v if v == WM_MBUTTONUP => Some(InputEvent::MouseButton {
+                                button: MouseButton::Middle,
+                                pressed: false,
+                            }),
+                            // Botões X: HIWORD(mouseData) indica XBUTTON1 (Button4) ou
+                            // XBUTTON2 (Button5). Encaminhar ao remoto e suprimir local.
+                            v if v == WM_XBUTTONDOWN => {
+                                let xb = (data.mouseData >> 16) as u16;
+                                let button = if xb == XBUTTON2 {
+                                    MouseButton::Button5
+                                } else {
+                                    MouseButton::Button4
+                                };
+                                Some(InputEvent::MouseButton {
+                                    button,
+                                    pressed: true,
+                                })
+                            }
+                            v if v == WM_XBUTTONUP => {
+                                let xb = (data.mouseData >> 16) as u16;
+                                let button = if xb == XBUTTON2 {
+                                    MouseButton::Button5
+                                } else {
+                                    MouseButton::Button4
+                                };
+                                Some(InputEvent::MouseButton {
+                                    button,
+                                    pressed: false,
+                                })
+                            }
+                            // Scroll vertical: HIWORD(mouseData) é o delta com sinal.
+                            // Encaminhar ao remoto e suprimir local (caso contrário o
+                            // scroll aplicar-se-ia simultaneamente nas duas máquinas).
+                            v if v == WM_MOUSEWHEEL => {
+                                let delta = ((data.mouseData >> 16) as i16) as f32 / 120.0;
+                                Some(InputEvent::MouseScroll { dx: 0.0, dy: delta })
+                            }
+                            // Scroll horizontal: HIWORD(mouseData) é o delta com sinal em dx.
+                            v if v == WM_MOUSEHWHEEL => {
+                                let delta = ((data.mouseData >> 16) as i16) as f32 / 120.0;
+                                Some(InputEvent::MouseScroll { dx: delta, dy: 0.0 })
+                            }
                             _ => None,
                         };
                         if let Some(ev) = event {
@@ -236,25 +338,68 @@ impl InputCapture for WindowsCapture {
 
                     // ── Modo local (cursor neste PC) ───────────────────────────────────
                     let event = match msg_type {
-                            v if v == WM_MOUSEMOVE => {
-                            let (nx, ny) = normalize_cursor_virtual_desktop_01(data.pt.x, data.pt.y);
+                        v if v == WM_MOUSEMOVE => {
+                            let (nx, ny) =
+                                normalize_cursor_virtual_desktop_01(data.pt.x, data.pt.y);
                             Some(InputEvent::MouseMove { x: nx, y: ny })
                         }
                         v if v == WM_LBUTTONDOWN => Some(InputEvent::MouseButton {
-                            button: MouseButton::Left, pressed: true,
+                            button: MouseButton::Left,
+                            pressed: true,
                         }),
                         v if v == WM_LBUTTONUP => Some(InputEvent::MouseButton {
-                            button: MouseButton::Left, pressed: false,
+                            button: MouseButton::Left,
+                            pressed: false,
                         }),
                         v if v == WM_RBUTTONDOWN => Some(InputEvent::MouseButton {
-                            button: MouseButton::Right, pressed: true,
+                            button: MouseButton::Right,
+                            pressed: true,
                         }),
                         v if v == WM_RBUTTONUP => Some(InputEvent::MouseButton {
-                            button: MouseButton::Right, pressed: false,
+                            button: MouseButton::Right,
+                            pressed: false,
                         }),
+                        v if v == WM_MBUTTONDOWN => Some(InputEvent::MouseButton {
+                            button: MouseButton::Middle,
+                            pressed: true,
+                        }),
+                        v if v == WM_MBUTTONUP => Some(InputEvent::MouseButton {
+                            button: MouseButton::Middle,
+                            pressed: false,
+                        }),
+                        v if v == WM_XBUTTONDOWN => {
+                            let xb = (data.mouseData >> 16) as u16;
+                            let button = if xb == XBUTTON2 {
+                                MouseButton::Button5
+                            } else {
+                                MouseButton::Button4
+                            };
+                            Some(InputEvent::MouseButton {
+                                button,
+                                pressed: true,
+                            })
+                        }
+                        v if v == WM_XBUTTONUP => {
+                            let xb = (data.mouseData >> 16) as u16;
+                            let button = if xb == XBUTTON2 {
+                                MouseButton::Button5
+                            } else {
+                                MouseButton::Button4
+                            };
+                            Some(InputEvent::MouseButton {
+                                button,
+                                pressed: false,
+                            })
+                        }
                         v if v == WM_MOUSEWHEEL => {
                             let delta = ((data.mouseData >> 16) as i16) as f32 / 120.0;
                             Some(InputEvent::MouseScroll { dx: 0.0, dy: delta })
+                        }
+                        // Scroll horizontal: HIWORD(mouseData) é o delta com sinal em dx.
+                        // Antes só WM_MOUSEWHEEL era tratado e dx ficava sempre 0.0.
+                        v if v == WM_MOUSEHWHEEL => {
+                            let delta = ((data.mouseData >> 16) as i16) as f32 / 120.0;
+                            Some(InputEvent::MouseScroll { dx: delta, dy: 0.0 })
                         }
                         _ => None,
                     };
@@ -272,8 +417,7 @@ impl InputCapture for WindowsCapture {
                 l_param: LPARAM,
             ) -> LRESULT {
                 use windows::Win32::UI::WindowsAndMessaging::{
-                    CallNextHookEx, KBDLLHOOKSTRUCT,
-                    WM_KEYDOWN, WM_SYSKEYDOWN,
+                    CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
                 };
 
                 if n_code == HC_ACTION as i32 {
@@ -283,22 +427,41 @@ impl InputCapture for WindowsCapture {
 
                     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
                     let mut mods = Modifiers::NONE;
-                    if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0   { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                    if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                    if GetAsyncKeyState(VK_MENU.0 as i32) < 0    { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
+                    if GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 {
+                        mods = Modifiers(mods.0 | Modifiers::SHIFT.0);
+                    }
+                    if GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 {
+                        mods = Modifiers(mods.0 | Modifiers::CTRL.0);
+                    }
+                    if GetAsyncKeyState(VK_MENU.0 as i32) < 0 {
+                        mods = Modifiers(mods.0 | Modifiers::ALT.0);
+                    }
                     if GetAsyncKeyState(VK_LWIN.0 as i32) < 0
-                    || GetAsyncKeyState(VK_RWIN.0 as i32) < 0    { mods = Modifiers(mods.0 | Modifiers::META.0); }
-
-                    // Converter VK → HID. Sem mapa, descartar (não corromper o
-                    // outro lado com keycodes Windows-specific).
-                    let Some(hid) = crate::input::keycodes::vk_to_hid(data.vkCode) else {
-                        return CallNextHookEx(None, n_code, w_param, l_param);
-                    };
+                        || GetAsyncKeyState(VK_RWIN.0 as i32) < 0
+                    {
+                        mods = Modifiers(mods.0 | Modifiers::META.0);
+                    }
 
                     // Suprimir o evento local quando o cursor está no remoto,
                     // para não digitar nas duas máquinas. Em modo local
                     // (cursor neste PC), continuamos a passar via CallNextHookEx.
                     let suppress_local = WIN_CURSOR_LOCKED.load(Ordering::Acquire);
+
+                    // Converter VK → HID. Sem mapa, não encaminhamos (não corromper o
+                    // outro lado com keycodes Windows-specific). Mas o tratamento de
+                    // supressão difere conforme o modo:
+                    //  - LOCKED: a tecla TEM de ser suprimida localmente mesmo sem HID,
+                    //    senão "vaza" para esta máquina enquanto o cursor está no remoto
+                    //    (espelha o comportamento do macOS, que devolve None/suprime).
+                    //    Sem HID não há nada a encaminhar, apenas suprimimos.
+                    //  - LOCAL: mantemos o pass-through via CallNextHookEx para não
+                    //    suprimir teclas que o utilizador usa nesta própria máquina.
+                    let Some(hid) = crate::input::keycodes::vk_to_hid(data.vkCode) else {
+                        if suppress_local {
+                            return LRESULT(1);
+                        }
+                        return CallNextHookEx(None, n_code, w_param, l_param);
+                    };
 
                     call_hook_cb(InputEvent::KeyEvent {
                         keycode: hid,
@@ -314,6 +477,12 @@ impl InputCapture for WindowsCapture {
             }
 
             unsafe {
+                // GetModuleHandleW(None) devolve o handle do módulo do processo. Pode
+                // teoricamente ser null; unwrap_or_default() dá um HMODULE(0) nesse caso.
+                // Para hooks low-level (WH_MOUSE_LL / WH_KEYBOARD_LL) o Windows ignora o
+                // hMod e o hook é instalado na mesma thread, por isso um handle null aqui
+                // é aceitável — eventuais falhas são reportadas pelo Err de
+                // SetWindowsHookExW abaixo. Mantemos funcional sem abortar.
                 let hmod = GetModuleHandleW(None).unwrap_or_default();
                 let mouse_hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0) {
                     Ok(h) => h,
@@ -325,7 +494,8 @@ impl InputCapture for WindowsCapture {
                         return;
                     }
                 };
-                let kb_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0) {
+                let kb_hook = match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0)
+                {
                     Ok(h) => h,
                     Err(e) => {
                         let msg = format!("falha ao instalar WH_KEYBOARD_LL: {}", e);
@@ -343,7 +513,7 @@ impl InputCapture for WindowsCapture {
                 let mut msg = MSG::default();
                 while running.load(Ordering::SeqCst) {
                     use windows::Win32::UI::WindowsAndMessaging::{
-                        PeekMessageW, TranslateMessage, DispatchMessageW, PM_REMOVE,
+                        DispatchMessageW, PeekMessageW, TranslateMessage, PM_REMOVE,
                     };
                     if PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                         TranslateMessage(&msg);
@@ -395,7 +565,7 @@ impl InputCapture for WindowsCapture {
 
         let (left, top, w, h) = primary_display_bounds();
         let cx = left + w as i32 / 2;
-        let cy = top  + h as i32 / 2;
+        let cy = top + h as i32 / 2;
 
         WIN_CENTER_X.store(cx, Ordering::Release);
         WIN_CENTER_Y.store(cy, Ordering::Release);
@@ -412,7 +582,7 @@ impl InputCapture for WindowsCapture {
 
         // Warp para centro e remover restrição de ClipCursor (se existir)
         unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{SetCursorPos, ClipCursor};
+            use windows::Win32::UI::WindowsAndMessaging::{ClipCursor, SetCursorPos};
             ClipCursor(None).ok();
             let _ = SetCursorPos(cx, cy);
         }
@@ -444,9 +614,9 @@ impl InputCapture for WindowsCapture {
             let pre_y = WIN_PRE_LOCK_Y.load(Ordering::Acquire);
             const MARGIN: i32 = 80;
             let max_x = left + w as i32 - MARGIN;
-            let max_y = top  + h as i32 - MARGIN;
+            let max_y = top + h as i32 - MARGIN;
             let min_x = left + MARGIN;
-            let min_y = top  + MARGIN;
+            let min_y = top + MARGIN;
             let x = pre_x.clamp(min_x, max_x);
             let y = pre_y.clamp(min_y, max_y);
 
@@ -474,19 +644,23 @@ impl InputCapture for WindowsCapture {
 pub struct WindowsInjector;
 
 impl WindowsInjector {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl InputInjector for WindowsInjector {
     fn inject(&self, event: InputEvent) -> Result<(), String> {
         use windows::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, MOUSEINPUT,
-            INPUT_MOUSE,
-            MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
-            MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-            MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-            MOUSEEVENTF_WHEEL,
+            SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+            MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+            MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
+            MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
         };
+        // mouseData para os botões X identifica qual botão (XBUTTON1=Button4,
+        // XBUTTON2=Button5). Constantes literais coerentes com a captura.
+        const XBUTTON1: u32 = 0x0001;
+        const XBUTTON2: u32 = 0x0002;
 
         let inputs: Vec<INPUT> = match event {
             InputEvent::MouseMove { x, y } => {
@@ -507,19 +681,27 @@ impl InputInjector for WindowsInjector {
                 }]
             }
             InputEvent::MouseButton { button, pressed } => {
-                let flags = match (button, pressed) {
-                    (MouseButton::Left,  true)  => MOUSEEVENTF_LEFTDOWN,
-                    (MouseButton::Left,  false) => MOUSEEVENTF_LEFTUP,
-                    (MouseButton::Right, true)  => MOUSEEVENTF_RIGHTDOWN,
-                    (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
-                    _ => return Ok(()),
+                // Para os botões X o Windows exige mouseData = XBUTTON1/XBUTTON2 a
+                // identificar qual botão; os demais usam mouseData = 0.
+                let (flags, mouse_data) = match (button, pressed) {
+                    (MouseButton::Left, true) => (MOUSEEVENTF_LEFTDOWN, 0u32),
+                    (MouseButton::Left, false) => (MOUSEEVENTF_LEFTUP, 0u32),
+                    (MouseButton::Right, true) => (MOUSEEVENTF_RIGHTDOWN, 0u32),
+                    (MouseButton::Right, false) => (MOUSEEVENTF_RIGHTUP, 0u32),
+                    (MouseButton::Middle, true) => (MOUSEEVENTF_MIDDLEDOWN, 0u32),
+                    (MouseButton::Middle, false) => (MOUSEEVENTF_MIDDLEUP, 0u32),
+                    (MouseButton::Button4, true) => (MOUSEEVENTF_XDOWN, XBUTTON1),
+                    (MouseButton::Button4, false) => (MOUSEEVENTF_XUP, XBUTTON1),
+                    (MouseButton::Button5, true) => (MOUSEEVENTF_XDOWN, XBUTTON2),
+                    (MouseButton::Button5, false) => (MOUSEEVENTF_XUP, XBUTTON2),
                 };
                 vec![INPUT {
                     r#type: INPUT_MOUSE,
                     Anonymous: INPUT_0 {
                         mi: MOUSEINPUT {
-                            dx: 0, dy: 0,
-                            mouseData: 0,
+                            dx: 0,
+                            dy: 0,
+                            mouseData: mouse_data,
                             dwFlags: flags,
                             time: 0,
                             dwExtraInfo: 0,
@@ -527,22 +709,50 @@ impl InputInjector for WindowsInjector {
                     },
                 }]
             }
-            InputEvent::MouseScroll { dy, .. } => {
-                let wheel = (dy * 120.0) as i32;
-                vec![INPUT {
-                    r#type: INPUT_MOUSE,
-                    Anonymous: INPUT_0 {
-                        mi: MOUSEINPUT {
-                            dx: 0, dy: 0,
-                            mouseData: wheel as u32,
-                            dwFlags: MOUSEEVENTF_WHEEL,
-                            time: 0,
-                            dwExtraInfo: 0,
+            InputEvent::MouseScroll { dx, dy } => {
+                // Emitir um evento por eixo com delta não-nulo: MOUSEEVENTF_WHEEL para
+                // o vertical (dy) e MOUSEEVENTF_HWHEEL para o horizontal (dx). Antes só
+                // o vertical era injectado e o scroll horizontal era perdido.
+                let mut inputs: Vec<INPUT> = Vec::with_capacity(2);
+                if dy != 0.0 {
+                    let wheel = (dy * 120.0) as i32;
+                    inputs.push(INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: MOUSEINPUT {
+                                dx: 0,
+                                dy: 0,
+                                mouseData: wheel as u32,
+                                dwFlags: MOUSEEVENTF_WHEEL,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
                         },
-                    },
-                }]
+                    });
+                }
+                if dx != 0.0 {
+                    let hwheel = (dx * 120.0) as i32;
+                    inputs.push(INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: MOUSEINPUT {
+                                dx: 0,
+                                dy: 0,
+                                mouseData: hwheel as u32,
+                                dwFlags: MOUSEEVENTF_HWHEEL,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    });
+                }
+                inputs
             }
-            InputEvent::KeyEvent { keycode, pressed, modifiers } => {
+            InputEvent::KeyEvent {
+                keycode,
+                pressed,
+                modifiers,
+            } => {
                 // Converter HID → VK. Sem mapa, descartar para não enviar
                 // SendInput com VK arbitrário (poderia disparar tecla aleatória).
                 let Some(vk_main) = crate::input::keycodes::hid_to_vk(keycode) else {
@@ -560,9 +770,9 @@ impl InputInjector for WindowsInjector {
                 if pressed {
                     let mod_keys = [
                         (Modifiers::SHIFT, 0x10u16),
-                        (Modifiers::CTRL,  0x11u16),
-                        (Modifiers::ALT,   0x12u16),
-                        (Modifiers::META,  0x5Bu16),
+                        (Modifiers::CTRL, 0x11u16),
+                        (Modifiers::ALT, 0x12u16),
+                        (Modifiers::META, 0x5Bu16),
                     ];
                     for (m, vk) in &mod_keys {
                         if modifiers.contains(*m) {
@@ -576,7 +786,9 @@ impl InputInjector for WindowsInjector {
             }
         };
 
-        if inputs.is_empty() { return Ok(()); }
+        if inputs.is_empty() {
+            return Ok(());
+        }
 
         unsafe {
             let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
@@ -590,9 +802,13 @@ impl InputInjector for WindowsInjector {
 
 fn make_key_input(vk: u16, key_up: bool) -> windows::Win32::UI::Input::KeyboardAndMouse::INPUT {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP,
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     };
-    let flags = if key_up { KEYEVENTF_KEYUP } else { Default::default() };
+    let flags = if key_up {
+        KEYEVENTF_KEYUP
+    } else {
+        Default::default()
+    };
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {

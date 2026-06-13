@@ -77,6 +77,8 @@ pub struct AppState {
     pub transfers: Arc<Mutex<HashMap<u32, TransferProgress>>>,
     /// Próximo ID de transferência
     pub next_transfer_id: Arc<Mutex<u32>>,
+    /// Caminhos dos arquivos enviados (id → path) — permite reenvio em FileRetry
+    pub sent_files: Arc<Mutex<HashMap<u32, std::path::PathBuf>>>,
     /// Estatísticas da sessão atual
     pub stats: Arc<SessionStats>,
     /// Flag de modo lock (pausar transição de cursor)
@@ -99,6 +101,7 @@ impl AppState {
             session_started_at: Arc::new(Mutex::new(None)),
             transfers: Arc::new(Mutex::new(HashMap::new())),
             next_transfer_id: Arc::new(Mutex::new(1)),
+            sent_files: Arc::new(Mutex::new(HashMap::new())),
             stats: Arc::new(SessionStats::default()),
             lock_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
@@ -153,8 +156,8 @@ impl AppState {
     /// Gera próximo ID de transferência (thread-safe)
     pub async fn next_transfer_id(&self) -> u32 {
         let mut id = self.next_transfer_id.lock().await;
-        let current = *id;
-        *id = id.wrapping_add(1).max(1);
+        let current = (*id).max(1);
+        *id = current.wrapping_add(1).max(1);
         current
     }
 

@@ -3,7 +3,7 @@
  * Retorna funções de cleanup para evitar vazamentos.
  */
 import { invoke } from '@tauri-apps/api/core';
-import { onEvent } from '../utils/tauri-events';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { addLog } from './Logs';
 
 export interface StatusPayload {
@@ -70,6 +70,8 @@ export function cleanupStatusHandlers(): void {
  */
 export async function initStatusListener(): Promise<() => void> {
   let pollId: ReturnType<typeof setInterval> | null = null;
+  // Guardar os unlisten dos eventos Tauri para que a cleanup retornada remova TUDO o que esta função criou.
+  const unlisteners: UnlistenFn[] = [];
 
   // Polling constante: garante UI alinhada ao backend mesmo se o evento Tauri falhar
   pollId = setInterval(async () => {
@@ -83,17 +85,27 @@ export async function initStatusListener(): Promise<() => void> {
   }, 900);
 
   // Evento em tempo real quando o Rust emite (complementa o polling)
-  await onEvent<unknown>("movex://status-changed", (raw) => {
-    const status = normalizeStatusPayload(raw);
-    handlers.forEach((h) => h(status));
-  });
+  try {
+    const unStatus = await listen<unknown>("movex://status-changed", (e) => {
+      const status = normalizeStatusPayload(e.payload);
+      handlers.forEach((h) => h(status));
+    });
+    unlisteners.push(unStatus);
 
-  // Falhas/sucessos de ligação: aparecem no painel de logs mesmo com notificações do SO desligadas (especialmente macOS).
-  await onEvent<{ level: string; message: string }>("movex://connection-log", (p) => {
-    const lv =
-      p.level === "warn" || p.level === "warning" ? "warn" : p.level === "sec" ? "sec" : "info";
-    addLog(p.message, lv);
-  });
+    // Falhas/sucessos de ligação: aparecem no painel de logs mesmo com notificações do SO desligadas (especialmente macOS).
+    const unLog = await listen<{ level: string; message: string }>(
+      "movex://connection-log",
+      (e) => {
+        const p = e.payload;
+        const lv =
+          p.level === "warn" || p.level === "warning" ? "warn" : p.level === "sec" ? "sec" : "info";
+        addLog(p.message, lv);
+      },
+    );
+    unlisteners.push(unLog);
+  } catch {
+    /* fora do Tauri — sem eventos, resta o polling */
+  }
 
   // Carregar estado inicial (handlers já devem estar registados — ver Dashboard)
   try {
@@ -104,9 +116,14 @@ export async function initStatusListener(): Promise<() => void> {
     /* fora do Tauri */
   }
 
-  // Retornar cleanup
+  // Retornar cleanup: remove o polling E os listeners Tauri registados aqui.
   return () => {
-    if (pollId !== null) clearInterval(pollId);
+    if (pollId !== null) {
+      clearInterval(pollId);
+      pollId = null;
+    }
+    unlisteners.forEach((un) => un());
+    unlisteners.length = 0;
   };
 }
 

@@ -49,6 +49,27 @@ pub(crate) async fn send_file_via_channel(
     Ok(())
 }
 
+/// Reenvia um arquivo previamente enviado, em resposta a um `FileRetry` do peer
+/// (ex.: checksum divergente no receptor). Reusa o MESMO `id` para o receptor
+/// reconciliar a transferência. Retorna erro se o `id` não for conhecido ou se
+/// não houver conexão ativa.
+pub(crate) async fn resend_file(state: &SharedState, id: u32) -> Result<(), String> {
+    let path = {
+        let map = state.sent_files.lock().await;
+        map.get(&id).cloned()
+    }
+    .ok_or_else(|| format!("FileRetry: arquivo id={} desconhecido", id))?;
+
+    let tx = state.message_tx.lock().await.clone()
+        .ok_or_else(|| "Sem conexão ativa para reenvio".to_string())?;
+
+    let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let file_size = tokio::fs::metadata(&path).await.map_err(|e| e.to_string())?.len();
+
+    tracing::info!("Reenviando '{}' (id={}, {} bytes) após FileRetry", file_name, id, file_size);
+    send_file_via_channel(&path, id, file_size, file_name, &tx, state.transfers.clone()).await
+}
+
 /// Envia um arquivo ao peer conectado
 #[tauri::command]
 pub async fn send_file_to_peer(
@@ -70,6 +91,9 @@ pub async fn send_file_to_peer(
     if path.is_dir() {
         return Err("Não é possível enviar diretórios".to_string());
     }
+
+    // Registrar caminho para permitir reenvio em caso de FileRetry do peer.
+    state.sent_files.lock().await.insert(transfer_id, path.clone());
 
     let state_clone = state.inner().clone();
 
@@ -169,6 +193,9 @@ pub async fn drop_file_to_peer(
                 direction: crate::transfer::TransferDirection::Sending,
             });
         }
+
+        // Registrar caminho para permitir reenvio em caso de FileRetry do peer.
+        state.sent_files.lock().await.insert(transfer_id, path.clone());
 
         let tx_clone = tx.clone();
         let state_clone = state.inner().clone();

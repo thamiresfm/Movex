@@ -5,17 +5,20 @@ pub async fn check_for_update(app: tauri::AppHandle) -> Result<Option<String>, S
     match app.updater() {
         Ok(updater) => {
             match updater.check().await {
+                // Há atualização disponível.
                 Ok(Some(update)) => Ok(Some(update.version.to_string())),
+                // Está atualizado — único caso que devolve Ok(None).
                 Ok(None) => Ok(None),
+                // Erro real de rede/servidor — não mascarar como "sem update".
                 Err(e) => {
                     tracing::warn!("Erro ao verificar atualizações: {}", e);
-                    Ok(None)
+                    Err("Falha ao verificar atualizações".to_string())
                 }
             }
         }
         Err(e) => {
             tracing::warn!("Updater não disponível: {}", e);
-            Ok(None)
+            Err("Atualizador indisponível".to_string())
         }
     }
 }

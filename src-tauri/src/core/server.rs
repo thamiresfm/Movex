@@ -8,7 +8,7 @@ use crate::core::state::{ActiveScreen, ConnectionStatus, SharedState};
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::transport::{
     create_tls_acceptor, load_or_generate_server_cert, recv_message, recv_message_counted,
-    send_message,
+    send_message, send_message_flushed,
 };
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
@@ -173,10 +173,20 @@ async fn handle_client<S>(
         return;
     }
 
-    let hello = match recv_message(&mut stream).await {
-        Ok(m) => m,
-        Err(e) => {
+    // Timeout no handshake: um cliente que completa TLS mas nunca envia Hello
+    // travaria esta task em Connecting indefinidamente. 10s é folgado para LAN.
+    let hello = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        recv_message(&mut stream),
+    ).await {
+        Ok(Ok(m)) => m,
+        Ok(Err(e)) => {
             warn!("Erro ao receber Hello de {}: {}", peer_addr, e);
+            server_resume_listening(&state).await;
+            return;
+        }
+        Err(_) => {
+            warn!("Timeout aguardando Hello de {} (10s)", peer_addr);
             server_resume_listening(&state).await;
             return;
         }
@@ -185,7 +195,7 @@ async fn handle_client<S>(
     let peer_hostname = match hello {
         Message::Hello { version, hostname, hmac } => {
             if version != PROTOCOL_VERSION {
-                let _ = send_message(&mut stream, &Message::HelloReject {
+                let _ = send_message_flushed(&mut stream, &Message::HelloReject {
                     reason: format!("Versão incompatível: esperado {}, recebido {}", PROTOCOL_VERSION, version),
                 }).await;
                 server_resume_listening(&state).await;
@@ -196,7 +206,7 @@ async fn handle_client<S>(
                 warn!("Handshake rejeitado de {}: HMAC inválido — oferecendo PSK sync via TLS", peer_addr);
                 // Envia o PSK actual pela camada TLS já estabelecida e autenticada (TOFU).
                 // O cliente só aceita se já conhecia o certificado deste servidor.
-                let _ = send_message(&mut stream, &Message::HelloPskSync {
+                let _ = send_message_flushed(&mut stream, &Message::HelloPskSync {
                     new_psk_hex: psk,
                 }).await;
                 server_resume_listening(&state).await;
@@ -205,7 +215,7 @@ async fn handle_client<S>(
             // Truncar para evitar hostname arbitrariamente longo em notificações/logs.
             let h = hostname.trim().chars().take(64).collect::<String>();
             if h.is_empty() {
-                let _ = send_message(&mut stream, &Message::HelloReject {
+                let _ = send_message_flushed(&mut stream, &Message::HelloReject {
                     reason: "Nome de ecrã vazio.".into(),
                 }).await;
                 server_resume_listening(&state).await;
@@ -227,7 +237,7 @@ async fn handle_client<S>(
                 "Nome de ecrã do cliente '{}' não coincide com o esperado '{}'",
                 peer_hostname, exp
             );
-            let _ = send_message(&mut stream, &Message::HelloReject {
+            let _ = send_message_flushed(&mut stream, &Message::HelloReject {
                 reason: format!(
                     "Nome de ecrã do cliente («{}») não coincide com o configurado no servidor («{}»). Ajuste em Configurações (estilo Barrier).",
                     peer_hostname.trim(),
@@ -242,10 +252,14 @@ async fn handle_client<S>(
     // Sem passo de aprovação no servidor: após TLS + Hello válido, aceita de imediato.
     let our_screen_name = { state.settings.lock().await.screen_name.clone() };
 
-    let _ = send_message(&mut stream, &Message::HelloAck {
+    let _ = send_message_flushed(&mut stream, &Message::HelloAck {
         version: PROTOCOL_VERSION,
         hostname: our_screen_name,
     }).await;
+
+    // Reset defensivo: uma sessão anterior pode ter terminado por panic sem cleanup.
+    state.active_screen_remote.store(false, std::sync::atomic::Ordering::Release);
+    *state.active_screen.lock().await = crate::core::state::ActiveScreen::Local;
 
     info!("Cliente autenticado: {} ({})", peer_hostname, peer_addr);
     state.send_notification(
@@ -271,6 +285,7 @@ async fn handle_client<S>(
 
     let (msg_tx, mut msg_rx) = mpsc::channel::<Message>(256);
     { *state.message_tx.lock().await = Some(msg_tx.clone()); }
+    tracing::info!("handle_client: message_tx configurado");
 
     let peer_position = {
         let s = state.settings.lock().await;
@@ -282,7 +297,11 @@ async fn handle_client<S>(
         }
     };
     // Borda KMS na área **virtual total** — não apenas no rect do primário.
-    let monitors = crate::screen::layout::detect_monitors();
+    // detect_monitors é síncrona/bloqueante (Win32/CGDisplay): spawn_blocking
+    // para não congelar o runtime Tokio.
+    let monitors = tokio::task::spawn_blocking(crate::screen::layout::detect_monitors)
+        .await
+        .unwrap_or_default();
     let (_, _, bbox_w, bbox_h) = monitors.bounding_box();
     let primary = monitors
         .monitors
@@ -400,7 +419,7 @@ async fn handle_client<S>(
         tokio::select! {
             _ = cancel.cancelled() => {
                 info!("Sessão com {} cancelada", peer_addr);
-                let _ = send_message(&mut stream, &Message::Disconnect {
+                let _ = send_message_flushed(&mut stream, &Message::Disconnect {
                     reason: "servidor encerrado".into(),
                 }).await;
                 break;
@@ -418,7 +437,7 @@ async fn handle_client<S>(
 
             _ = ping_interval.tick() => {
                 ping_sent_at = Some(std::time::Instant::now());
-                if send_message(&mut stream, &Message::Ping).await.is_err() {
+                if send_message_flushed(&mut stream, &Message::Ping).await.is_err() {
                     break;
                 }
             }
@@ -455,7 +474,7 @@ async fn handle_client<S>(
                         break;
                     }
                     Message::Ping => {
-                        let _ = send_message(&mut stream, &Message::Pong).await;
+                        let _ = send_message_flushed(&mut stream, &Message::Pong).await;
                     }
                     ref msg @ Message::ClipboardData { .. } => {
                         crate::clipboard::sync::apply_clipboard_message(msg);
@@ -491,6 +510,15 @@ async fn handle_client<S>(
                                 }
                             }
                         }
+                    }
+                    Message::FileRetry { id } => {
+                        warn!("Peer solicitou reenvio do arquivo id={}", id);
+                        let st = state.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = crate::ipc::transfer::resend_file(&st, id).await {
+                                warn!("FileRetry: reenvio falhou: {}", e);
+                            }
+                        });
                     }
                     _ => {}
                 }

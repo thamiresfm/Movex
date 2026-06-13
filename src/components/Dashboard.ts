@@ -105,6 +105,15 @@ interface PeerInfo {
   port: number;
 }
 
+/** Item do histórico de conexões (get_recent_peers). */
+interface RecentPeer {
+  hostname: string;
+  addr: string;
+  port: number;
+  /** epoch em segundos */
+  last_connected: number;
+}
+
 interface SettingsPayload {
   hostname: string;
   screen_name?: string;
@@ -114,6 +123,32 @@ interface SettingsPayload {
   peer_position: string;
   setup_complete: boolean;
   port?: number;
+  server_addr?: string | null;
+  psk_hex?: string;
+  autostart?: boolean;
+  theme?: string;
+  notifications_enabled?: boolean;
+  clipboard_sync_enabled?: boolean;
+  mouse_sensitivity?: number;
+  lock_key?: string;
+  lock_mode?: boolean;
+}
+
+/** Estatísticas acumuladas da sessão (get_stats). */
+interface StatsPayload {
+  bytes_sent?: number;
+  bytes_received?: number;
+  events_sent?: number;
+  events_received?: number;
+  files_sent?: number;
+  files_received?: number;
+}
+
+/** Transferência de arquivo em andamento (get_transfers). */
+interface TransferProgress {
+  name: string;
+  direction: string;
+  percent?: number;
 }
 
 export async function renderDashboard(): Promise<void> {
@@ -318,7 +353,7 @@ export async function renderDashboard(): Promise<void> {
               <div id="logBody" style="padding:16px 20px;max-height:300px;overflow-y:auto;"></div>
               <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;">
                 <span style="color:var(--cyan);font-family:'JetBrains Mono',monospace;font-size:13px;">$</span>
-                <input id="cmdInput" style="flex:1;background:none;border:none;outline:none;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-2);" placeholder="Digite um comando (ex: netstat -a)..." />
+                <input id="cmdInput" style="flex:1;background:none;border:none;outline:none;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-2);" placeholder="Comandos internos: help, status, clear" />
               </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:12px;">
@@ -651,9 +686,9 @@ export async function renderDashboard(): Promise<void> {
   });
 
   // ── Cache de settings (raramente muda — evitar invoke por evento de status) ──
-  let cachedSettings: any = null;
+  let cachedSettings: SettingsPayload | null = null;
   const refreshSettings = async () => {
-    try { cachedSettings = await invoke<any>('get_settings'); } catch { /* fora do Tauri */ }
+    try { cachedSettings = await invoke<SettingsPayload>('get_settings'); } catch { /* fora do Tauri */ }
   };
   await refreshSettings();
   try {
@@ -680,6 +715,12 @@ export async function renderDashboard(): Promise<void> {
   paintPanelNetworkImmediate();
 
   let stopStatusPolling: () => void = () => {};
+
+  // Timers persistentes criados em renderDashboard — guardados para o cleanup global
+  // limpar (a troca de innerHTML não cancela timers nem listeners de window/document).
+  let accessibilityIntervalId: ReturnType<typeof setInterval> | null = null;
+  let updateCheckTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  let initialDiscoveryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Último peer com ligação bem-sucedida — usado para distinguir reconexão de 1.ª ligação
   let lastConnectedPeer: string | null = null;
@@ -790,7 +831,7 @@ export async function renderDashboard(): Promise<void> {
       }
       // Stats
       try {
-        const stats = await invoke<any>('get_stats');
+        const stats = await invoke<StatsPayload>('get_stats');
         const bytes = (n: number) => {
           if (n >= 1073741824) return `${(n/1073741824).toFixed(1)} GB`;
           if (n >= 1048576)    return `${(n/1048576).toFixed(1)} MB`;
@@ -816,7 +857,7 @@ export async function renderDashboard(): Promise<void> {
       } catch { /* sem stats */ }
       // Transferências
       try {
-        const transfers = await invoke<any[]>('get_transfers');
+        const transfers = await invoke<TransferProgress[]>('get_transfers');
         const section = document.getElementById('transfersSection');
         const list = document.getElementById('transfersList');
         if (section && list) {
@@ -859,6 +900,10 @@ export async function renderDashboard(): Promise<void> {
     cleanupFileTransfer();
     cleanupAllListeners();
     cleanupStatusHandlers();
+    // Cancelar timers persistentes (intervalo de acessibilidade + one-shots ainda pendentes)
+    if (accessibilityIntervalId != null) { clearInterval(accessibilityIntervalId); accessibilityIntervalId = null; }
+    if (updateCheckTimeoutId != null) { clearTimeout(updateCheckTimeoutId); updateCheckTimeoutId = null; }
+    if (initialDiscoveryTimeoutId != null) { clearTimeout(initialDiscoveryTimeoutId); initialDiscoveryTimeoutId = null; }
   };
 
   // wrapper de cache será instalado após saveConfig ser definido
@@ -893,11 +938,11 @@ export async function renderDashboard(): Promise<void> {
   };
   // ── Configurações ──────────────────────────────────────────────────────────
 
-  let currentRole = (cachedSettings?.role as string | undefined) ?? 'server';
+  let currentRole = ((cachedSettings as SettingsPayload | null)?.role) ?? 'server';
 
   const loadCurrentSettings = async () => {
     try {
-      const s = await invoke<any>('get_settings');
+      const s = await invoke<SettingsPayload>('get_settings');
       currentRole = s.role ?? 'server';
       applyRoleUI(currentRole);
 
@@ -1090,7 +1135,7 @@ export async function renderDashboard(): Promise<void> {
         theme,
         mouseSensitivity,
       });
-      const s = await invoke<any>('get_settings');
+      const s = await invoke<SettingsPayload>('get_settings');
       const screenName =
         (document.getElementById('screenNameInput') as HTMLInputElement)?.value?.trim() || s.hostname;
       const expectedRaw =
@@ -1146,7 +1191,7 @@ export async function renderDashboard(): Promise<void> {
       return;
     }
     await refreshSettings();
-    const port = Number((cachedSettings as { port?: number } | null)?.port ?? 24800);
+    const port = Number(cachedSettings?.port ?? 24800);
     if (!Number.isFinite(port) || port < 1 || port > 65535) {
       addLog('Porta inválida nas configurações.', 'warn');
       return;
@@ -1272,7 +1317,8 @@ export async function renderDashboard(): Promise<void> {
       };
       await updateAccessibilityBanner();
       // Re-verificar a cada 5s enquanto o app está aberto (detecta quando o utilizador concede)
-      setInterval(updateAccessibilityBanner, 5000);
+      // Guardado para o __movexCleanup cancelar — caso contrário fica a correr para sempre.
+      accessibilityIntervalId = setInterval(() => { void updateAccessibilityBanner(); }, 5000);
     }
   } catch {
     /* ignorar se o comando não existir */
@@ -1305,7 +1351,7 @@ export async function renderDashboard(): Promise<void> {
       return;
     }
     await refreshSettings();
-    const s = cachedSettings as { role?: string; server_addr?: string | null } | null;
+    const s = cachedSettings;
     const role = (s?.role ?? 'server').toLowerCase();
     const serverAddr = (s?.server_addr ?? '').trim();
     if (role === 'client' && !serverAddr) {
@@ -1357,7 +1403,8 @@ export async function renderDashboard(): Promise<void> {
   // Drag-and-drop, borda luminosa e status → módulos FileTransfer, ScreenBorder, ConnectionStatus
 
   // ── Verificar atualização ao iniciar ──────────────────────────────────────
-  setTimeout(async () => {
+  updateCheckTimeoutId = setTimeout(async () => {
+    updateCheckTimeoutId = null;
     try {
       const version = await invoke<string | null>('check_for_update');
       if (version) {
@@ -1417,7 +1464,8 @@ export async function renderDashboard(): Promise<void> {
         title: 'Selecionar arquivo para enviar ao peer',
       });
       if (!selected) return;
-      const path = typeof selected === 'string' ? selected : (selected as any).path ?? selected;
+      // open({ multiple:false }) devolve string | null — o caminho já é a própria string
+      const path = selected;
       addLog(`Enviando arquivo: ${path}...`, 'info');
       await invoke('send_file_to_peer', { path });
       addLog('Transferência iniciada.', 'sec');
@@ -1434,8 +1482,23 @@ export async function renderDashboard(): Promise<void> {
       btnConnect.style.display = 'inline-flex';
       btnDisconnect.style.display = 'none';
     }
-    await invoke('disconnect').catch(console.warn);
-    addLog('Desconectado.', 'info');
+    try {
+      await invoke('disconnect');
+      addLog('Desconectado.', 'info');
+    } catch (e: unknown) {
+      // Falha no backend: reflectir o erro na UI e reverter o estado otimista
+      addLog(`Falha ao desconectar: ${e}`, 'warn');
+      try {
+        const st = normalizeStatusPayload(await invoke<unknown>('get_status'));
+        applyPanelConnectionButtons(st);
+      } catch {
+        // Sem estado fiável: assumir que continua em sessão (reverter o swap otimista)
+        if (btnConnect && btnDisconnect) {
+          btnConnect.style.display = 'none';
+          btnDisconnect.style.display = 'inline-flex';
+        }
+      }
+    }
   };
 
   // ── Posicionamento do peer no mapa de telas ────────────────────────────────
@@ -1473,7 +1536,7 @@ export async function renderDashboard(): Promise<void> {
   const posSelector = document.getElementById('peerPositionSelector');
   if (posSelector && cachedSettings) {
     // Marcar posição atual
-    const currentPos = cachedSettings.peer_position ?? 'right';
+    const currentPos = (cachedSettings as SettingsPayload).peer_position ?? 'right';
     ['above','below','left','right'].forEach(p => {
       const btn = document.getElementById(`pos-${p}`);
       if (btn) btn.className = p === currentPos ? 'btn btn-cyan' : 'btn btn-outline';
@@ -1514,7 +1577,7 @@ export async function renderDashboard(): Promise<void> {
   // ── Histórico de conexões ──────────────────────────────────────────────────
   const loadRecentPeers = async () => {
     try {
-      const peers = await invoke<any[]>('get_recent_peers');
+      const peers = await invoke<RecentPeer[]>('get_recent_peers');
       const list = document.getElementById('recentPeersList')!;
       if (!peers || peers.length === 0) {
         list.innerHTML = '<div style="font-size:11px;color:var(--text-3);">Nenhuma conexão ainda</div>';
@@ -1530,7 +1593,7 @@ export async function renderDashboard(): Promise<void> {
         row.addEventListener('mouseover', () => { row.style.borderColor = 'var(--border-c)'; });
         row.addEventListener('mouseout', () => { row.style.borderColor = 'var(--border)'; });
         // Capturar addr e port sem interpolação de string em onclick
-        const addr = p.addr as string;
+        const addr = p.addr;
         const port = Number(p.port);
         row.addEventListener('click', () => connectToPeer(addr, port));
 
@@ -1637,7 +1700,8 @@ export async function renderDashboard(): Promise<void> {
   };
 
   // Busca inicial na rede (não depende só do poll de status)
-  setTimeout(() => {
+  initialDiscoveryTimeoutId = setTimeout(() => {
+    initialDiscoveryTimeoutId = null;
     void refreshDevices();
   }, 1200);
 
@@ -1650,6 +1714,95 @@ export async function renderDashboard(): Promise<void> {
     addLog(simulateCmd(cmd), 'sec');
     input.value = '';
   });
+
+  // ── Copiar texto para a área de transferência (com fallback para WebViews antigos) ──
+  const copyTextToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+
+  // ── Relatório de diagnóstico: monta a partir dos dados já disponíveis e copia ──
+  const generateDiagnosticReport = async () => {
+    const lines: string[] = [];
+    lines.push('═══ Relatório Movex ═══');
+    lines.push(`gerado: ${new Date().toLocaleString('pt-BR')}`);
+    lines.push(`versão: ${appVersion}`);
+    lines.push('');
+
+    // Estado da ligação (a partir do backend; ignorar se indisponível)
+    try {
+      const st = normalizeStatusPayload(await invoke<unknown>('get_status'));
+      lines.push('▸ Ligação');
+      lines.push(`  estado: ${st.status_text || (st.connected ? 'conectado' : 'desconectado')}`);
+      if (st.peer_hostname || st.peer_addr) {
+        lines.push(`  par: ${st.peer_hostname ?? '—'}${st.peer_addr ? ` (${st.peer_addr})` : ''}`);
+      }
+      if (st.latency_ms != null && st.latency_ms > 0) lines.push(`  latência: ${st.latency_ms} ms`);
+      lines.push(`  uptime: ${st.uptime_secs}s`);
+      lines.push('');
+    } catch { /* sem status */ }
+
+    // Configuração relevante (sem segredos: nunca incluir PSK/chave)
+    if (cachedSettings) {
+      lines.push('▸ Configuração');
+      lines.push(`  papel: ${cachedSettings.role ?? 'server'}`);
+      lines.push(`  porta: ${cachedSettings.port ?? 24800}`);
+      if (cachedSettings.role === 'client') {
+        lines.push(`  servidor: ${cachedSettings.server_addr ?? '(não definido)'}`);
+      }
+      lines.push('');
+    }
+
+    // Rede local
+    lines.push('▸ Rede local');
+    lines.push(`  IPs deste PC: ${movexLocalIpv4Cache || '(nenhum detectado)'}`);
+    lines.push('');
+
+    // Estatísticas acumuladas (se houver)
+    try {
+      const stats = await invoke<StatsPayload>('get_stats');
+      lines.push('▸ Estatísticas');
+      lines.push(`  bytes enviados/recebidos: ${stats.bytes_sent ?? 0} / ${stats.bytes_received ?? 0}`);
+      lines.push(`  eventos enviados/recebidos: ${stats.events_sent ?? 0} / ${stats.events_received ?? 0}`);
+      lines.push(`  ficheiros enviados/recebidos: ${stats.files_sent ?? 0} / ${stats.files_received ?? 0}`);
+      lines.push('');
+    } catch { /* sem stats */ }
+
+    // Logs visíveis no painel de segurança
+    const logText = (document.getElementById('logBody') as HTMLElement | null)?.innerText?.trim() ?? '';
+    lines.push('▸ Logs recentes');
+    lines.push(logText ? logText : '  (sem logs)');
+
+    const report = lines.join('\n');
+    const ok = await copyTextToClipboard(report);
+    addLog(
+      ok ? 'Relatório de diagnóstico copiado para a área de transferência.' : 'Relatório gerado, mas falhou ao copiar — veja os logs.',
+      ok ? 'sec' : 'warn',
+    );
+  };
+
+  // ── Reiniciar diagnósticos: re-dispara o diagnóstico de conexão ──────────────
+  const restartDiagnostics = async () => {
+    navTo('configuracoes');
+    addLog('Reexecutando diagnóstico de conexão…', 'info');
+    await runDiagnose();
+  };
 
   // ── Conectar TODOS os botões via addEventListener (referência direta) ────────
   const on = (id: string, fn: () => void) =>
@@ -1701,8 +1854,8 @@ export async function renderDashboard(): Promise<void> {
   on('btnPermWinPrivacy',  () => void openSystemPanel('privacy'));
   on('btnDiagnose',        () => void runDiagnose());
   on('btnAddMachine',      addNewMachine);
-  on('btnDiagReport',      () => addLog('Relatório completo: em desenvolvimento (use os logs abaixo para diagnóstico).', 'info'));
-  on('btnDiagRestart',     () => addLog('Reinício de diagnósticos: apenas registo no log (sem ação no sistema).', 'info'));
+  on('btnDiagReport',      () => void generateDiagnosticReport());
+  on('btnDiagRestart',     () => void restartDiagnostics());
 
   // Actualizar label em tempo real ao arrastar o slider
   document.getElementById('mouseSensInput')?.addEventListener('input', (e) => {

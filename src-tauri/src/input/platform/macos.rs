@@ -17,8 +17,8 @@
 //! - O evento sintético do warp tem sempre delta=0 → sem loop infinito
 //! - A velocidade do cursor inclui a aceleração do macOS (via location diff)
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
 // ── Sensibilidade do cursor (lado receptor / injector) ─────────────────────────
@@ -38,18 +38,18 @@ pub fn set_sensitivity(s: f32) {
     INJ_PREV_Y.store(u32::MAX, Ordering::Release);
 }
 
-use crate::input::events::{InputEvent, MouseButton, Modifiers};
 use super::{InputCapture, InputInjector};
+use crate::input::events::{InputEvent, Modifiers, MouseButton};
 
 pub struct MacOsCapture {
-    locked:   Arc<Mutex<bool>>,
+    locked: Arc<Mutex<bool>>,
     /// Centro do display principal — posição para onde o cursor é warped quando locked.
-    center:   Arc<Mutex<(f64, f64)>>,
+    center: Arc<Mutex<(f64, f64)>>,
     /// Última posição conhecida do cursor (equivalente a m_xCursor/m_yCursor do Barrier).
     /// Actualizado para `center` ANTES de cada warp para que o evento sintético do warp
     /// tenha delta zero.
     prev_pos: Arc<Mutex<(f64, f64)>>,
-    running:  Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
     /// Posição virtual do cursor no ecrã remoto (0..1, convenção padrão 0=topo-esq).
     virt_pos: Arc<Mutex<(f32, f32)>>,
     /// Posição do cursor IMEDIATAMENTE ANTES do `lock_cursor` (= antes de
@@ -62,10 +62,10 @@ pub struct MacOsCapture {
 impl MacOsCapture {
     pub fn new() -> Self {
         Self {
-            locked:   Arc::new(Mutex::new(false)),
-            center:   Arc::new(Mutex::new((0.0, 0.0))),
+            locked: Arc::new(Mutex::new(false)),
+            center: Arc::new(Mutex::new((0.0, 0.0))),
             prev_pos: Arc::new(Mutex::new((0.0, 0.0))),
-            running:  Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
             virt_pos: Arc::new(Mutex::new((0.5, 0.5))),
             pre_lock: Arc::new(Mutex::new(None)),
         }
@@ -73,15 +73,18 @@ impl MacOsCapture {
 }
 
 impl InputCapture for MacOsCapture {
-    fn start(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync + 'static>) -> Result<(), String> {
+    fn start(
+        &self,
+        callback: Box<dyn Fn(InputEvent) + Send + Sync + 'static>,
+    ) -> Result<(), String> {
         if self.running.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
 
-        let locked   = Arc::clone(&self.locked);
-        let center   = Arc::clone(&self.center);
+        let locked = Arc::clone(&self.locked);
+        let center = Arc::clone(&self.center);
         let prev_pos = Arc::clone(&self.prev_pos);
-        let running  = Arc::clone(&self.running);
+        let running = Arc::clone(&self.running);
         let virt_pos = Arc::clone(&self.virt_pos);
 
         // Canal síncrono usado pelo thread para reportar o resultado da criação do
@@ -91,13 +94,12 @@ impl InputCapture for MacOsCapture {
 
         std::thread::spawn(move || {
             use core_graphics::event::{
-                CGEventTap, CGEventTapLocation, CGEventTapPlacement,
-                CGEventTapOptions, CGEventType,
+                CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
             };
 
-            let callback   = Arc::new(callback);
-            let locked_c   = Arc::clone(&locked);
-            let center_c   = Arc::clone(&center);
+            let callback = Arc::new(callback);
+            let locked_c = Arc::clone(&locked);
+            let center_c = Arc::clone(&center);
             let prev_pos_c = Arc::clone(&prev_pos);
             let virt_pos_c = Arc::clone(&virt_pos);
 
@@ -109,14 +111,16 @@ impl InputCapture for MacOsCapture {
                     CGEventType::MouseMoved,
                     CGEventType::LeftMouseDown,
                     CGEventType::LeftMouseUp,
-                    CGEventType::LeftMouseDragged,   // arrastar no PC remoto
+                    CGEventType::LeftMouseDragged, // arrastar no PC remoto
                     CGEventType::RightMouseDown,
                     CGEventType::RightMouseUp,
-                    CGEventType::RightMouseDragged,  // arrastar no PC remoto
+                    CGEventType::RightMouseDragged, // arrastar no PC remoto
+                    CGEventType::OtherMouseDown,    // botão do meio + laterais (Button4/Button5)
+                    CGEventType::OtherMouseUp,
                     CGEventType::ScrollWheel,
                     CGEventType::KeyDown,
                     CGEventType::KeyUp,
-                    CGEventType::FlagsChanged,       // modificadores (Shift/Ctrl/Alt/Cmd)
+                    CGEventType::FlagsChanged, // modificadores (Shift/Ctrl/Alt/Cmd)
                 ],
                 move |_proxy, event_type, event| {
                     let is_locked = locked_c.lock().map(|g| *g).unwrap_or(false);
@@ -147,12 +151,14 @@ impl InputCapture for MacOsCapture {
                                 // Quando o CGWarpMouseCursorPosition gerar o evento sintético,
                                 // ele chegará com loc == center e dx = center - center = 0.
                                 {
-                                    let mut pp = prev_pos_c.lock().unwrap_or_else(|p| p.into_inner());
+                                    let mut pp =
+                                        prev_pos_c.lock().unwrap_or_else(|p| p.into_inner());
                                     *pp = (cx, cy);
                                 }
-                                let _ = core_graphics::display::CGDisplay::warp_mouse_cursor_position(
-                                    core_graphics::geometry::CGPoint { x: cx, y: cy }
-                                );
+                                let _ =
+                                    core_graphics::display::CGDisplay::warp_mouse_cursor_position(
+                                        core_graphics::geometry::CGPoint { x: cx, y: cy },
+                                    );
 
                                 // Descartar eventos com delta zero (evento sintético do warp)
                                 if dx.abs() < 0.5 && dy.abs() < 0.5 {
@@ -174,7 +180,8 @@ impl InputCapture for MacOsCapture {
                                 // com apenas metade do ecrã disponível em cada direção.
                                 // Usar bbox_w inteiro dava virt_pos_max=0.5 (parede no meio do ecrã remoto).
                                 let (vx, vy) = {
-                                    let mut vp = virt_pos_c.lock().unwrap_or_else(|p| p.into_inner());
+                                    let mut vp =
+                                        virt_pos_c.lock().unwrap_or_else(|p| p.into_inner());
                                     vp.0 = (vp.0 + dx / (w_nonempty * 0.5)).clamp(0.0, 1.0);
                                     vp.1 = (vp.1 + dy / (h_nonempty * 0.5)).clamp(0.0, 1.0);
                                     *vp
@@ -189,14 +196,46 @@ impl InputCapture for MacOsCapture {
                             | CGEventType::RightMouseDown
                             | CGEventType::RightMouseUp => {
                                 let btn_event = match event_type {
-                                    CGEventType::LeftMouseDown  => Some(InputEvent::MouseButton { button: MouseButton::Left,  pressed: true  }),
-                                    CGEventType::LeftMouseUp    => Some(InputEvent::MouseButton { button: MouseButton::Left,  pressed: false }),
-                                    CGEventType::RightMouseDown => Some(InputEvent::MouseButton { button: MouseButton::Right, pressed: true  }),
-                                    CGEventType::RightMouseUp   => Some(InputEvent::MouseButton { button: MouseButton::Right, pressed: false }),
+                                    CGEventType::LeftMouseDown => Some(InputEvent::MouseButton {
+                                        button: MouseButton::Left,
+                                        pressed: true,
+                                    }),
+                                    CGEventType::LeftMouseUp => Some(InputEvent::MouseButton {
+                                        button: MouseButton::Left,
+                                        pressed: false,
+                                    }),
+                                    CGEventType::RightMouseDown => Some(InputEvent::MouseButton {
+                                        button: MouseButton::Right,
+                                        pressed: true,
+                                    }),
+                                    CGEventType::RightMouseUp => Some(InputEvent::MouseButton {
+                                        button: MouseButton::Right,
+                                        pressed: false,
+                                    }),
                                     _ => None,
                                 };
                                 if let Some(ev) = btn_event {
                                     callback(ev);
+                                }
+                                return None;
+                            }
+                            // Botão do meio + laterais (Button4/Button5) chegam como
+                            // OtherMouseDown/Up. O número do botão distingue qual:
+                            // 2 = Middle, 3 = Button4, 4 = Button5. Suprimir local,
+                            // reencaminhar ao PC remoto.
+                            CGEventType::OtherMouseDown | CGEventType::OtherMouseUp => {
+                                use core_graphics::event::EventField;
+                                let btn_num = event
+                                    .get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER);
+                                let pressed = matches!(event_type, CGEventType::OtherMouseDown);
+                                let button = match btn_num {
+                                    2 => Some(MouseButton::Middle),
+                                    3 => Some(MouseButton::Button4),
+                                    4 => Some(MouseButton::Button5),
+                                    _ => None,
+                                };
+                                if let Some(button) = button {
+                                    callback(InputEvent::MouseButton { button, pressed });
                                 }
                                 return None;
                             }
@@ -205,9 +244,11 @@ impl InputCapture for MacOsCapture {
                             CGEventType::ScrollWheel => {
                                 use core_graphics::event::EventField;
                                 let dy = event.get_integer_value_field(
-                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1) as f32;
+                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
+                                ) as f32;
                                 let dx = event.get_integer_value_field(
-                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2) as f32;
+                                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2,
+                                ) as f32;
                                 callback(InputEvent::MouseScroll { dx, dy });
                                 return None;
                             }
@@ -217,45 +258,71 @@ impl InputCapture for MacOsCapture {
                             // 'a' no teclado físico e via 'aa' aparecer (uma local + uma
                             // remota injetada de volta via TCP).
                             CGEventType::KeyDown | CGEventType::KeyUp => {
-                                use core_graphics::event::{EventField, CGEventFlags};
-                                let mac_kc = event.get_integer_value_field(
-                                    EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                                use core_graphics::event::{CGEventFlags, EventField};
+                                let mac_kc = event
+                                    .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                                    as u32;
                                 let hid = crate::input::keycodes::mac_to_hid(mac_kc)?;
                                 let flags = event.get_flags();
                                 let mut mods = Modifiers::NONE;
-                                if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
+                                if flags.contains(CGEventFlags::CGEventFlagShift) {
+                                    mods = Modifiers(mods.0 | Modifiers::SHIFT.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagControl) {
+                                    mods = Modifiers(mods.0 | Modifiers::CTRL.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+                                    mods = Modifiers(mods.0 | Modifiers::ALT.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagCommand) {
+                                    mods = Modifiers(mods.0 | Modifiers::META.0);
+                                }
                                 let pressed = matches!(event_type, CGEventType::KeyDown);
-                                callback(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods });
+                                callback(InputEvent::KeyEvent {
+                                    keycode: hid,
+                                    pressed,
+                                    modifiers: mods,
+                                });
                                 return None;
                             }
                             // Modificadores (Shift/Ctrl/Alt/Cmd) geram FlagsChanged, não KeyDown/KeyUp.
                             // Sem este handler ficam presos no `_ => {}` e executam localmente em vez
                             // de serem encaminhados para o PC remoto.
                             CGEventType::FlagsChanged => {
-                                use core_graphics::event::{EventField, CGEventFlags};
-                                let mac_kc = event.get_integer_value_field(
-                                    EventField::KEYBOARD_EVENT_KEYCODE) as u32;
-                                let Some(hid) = crate::input::keycodes::mac_to_hid(mac_kc) else {
-                                    return None;
-                                };
+                                use core_graphics::event::{CGEventFlags, EventField};
+                                let mac_kc = event
+                                    .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                                    as u32;
+                                let hid = crate::input::keycodes::mac_to_hid(mac_kc)?;
                                 let flags = event.get_flags();
                                 let mod_bit: u64 = match mac_kc {
                                     0x38 | 0x3C => CGEventFlags::CGEventFlagShift.bits(),
                                     0x3B | 0x3E => CGEventFlags::CGEventFlagControl.bits(),
                                     0x3A | 0x3D => CGEventFlags::CGEventFlagAlternate.bits(),
                                     0x37 | 0x36 => CGEventFlags::CGEventFlagCommand.bits(),
-                                    _ => { return None; }
+                                    _ => {
+                                        return None;
+                                    }
                                 };
                                 let pressed = flags.bits() & mod_bit != 0;
                                 let mut mods = Modifiers::NONE;
-                                if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
-                                if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
-                                callback(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods });
+                                if flags.contains(CGEventFlags::CGEventFlagShift) {
+                                    mods = Modifiers(mods.0 | Modifiers::SHIFT.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagControl) {
+                                    mods = Modifiers(mods.0 | Modifiers::CTRL.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+                                    mods = Modifiers(mods.0 | Modifiers::ALT.0);
+                                }
+                                if flags.contains(CGEventFlags::CGEventFlagCommand) {
+                                    mods = Modifiers(mods.0 | Modifiers::META.0);
+                                }
+                                callback(InputEvent::KeyEvent {
+                                    keycode: hid,
+                                    pressed,
+                                    modifiers: mods,
+                                });
                                 return None;
                             }
                             _ => {}
@@ -272,44 +339,87 @@ impl InputCapture for MacOsCapture {
                             Some(InputEvent::MouseMove { x: nx, y: ny })
                         }
                         CGEventType::LeftMouseDown => Some(InputEvent::MouseButton {
-                            button: MouseButton::Left, pressed: true,
+                            button: MouseButton::Left,
+                            pressed: true,
                         }),
                         CGEventType::LeftMouseUp => Some(InputEvent::MouseButton {
-                            button: MouseButton::Left, pressed: false,
+                            button: MouseButton::Left,
+                            pressed: false,
                         }),
                         CGEventType::RightMouseDown => Some(InputEvent::MouseButton {
-                            button: MouseButton::Right, pressed: true,
+                            button: MouseButton::Right,
+                            pressed: true,
                         }),
                         CGEventType::RightMouseUp => Some(InputEvent::MouseButton {
-                            button: MouseButton::Right, pressed: false,
+                            button: MouseButton::Right,
+                            pressed: false,
                         }),
+                        // Botão do meio + laterais (Button4/Button5): número do botão
+                        // distingue qual — 2 = Middle, 3 = Button4, 4 = Button5.
+                        CGEventType::OtherMouseDown | CGEventType::OtherMouseUp => {
+                            use core_graphics::event::EventField;
+                            let btn_num = event
+                                .get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER);
+                            let pressed = matches!(event_type, CGEventType::OtherMouseDown);
+                            match btn_num {
+                                2 => Some(InputEvent::MouseButton {
+                                    button: MouseButton::Middle,
+                                    pressed,
+                                }),
+                                3 => Some(InputEvent::MouseButton {
+                                    button: MouseButton::Button4,
+                                    pressed,
+                                }),
+                                4 => Some(InputEvent::MouseButton {
+                                    button: MouseButton::Button5,
+                                    pressed,
+                                }),
+                                _ => None,
+                            }
+                        }
                         CGEventType::ScrollWheel => {
                             use core_graphics::event::EventField;
                             let dy = event.get_integer_value_field(
-                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1) as f32;
+                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
+                            ) as f32;
                             let dx = event.get_integer_value_field(
-                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2) as f32;
+                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2,
+                            ) as f32;
                             Some(InputEvent::MouseScroll { dx, dy })
                         }
                         CGEventType::KeyDown | CGEventType::KeyUp => {
-                            use core_graphics::event::{EventField, CGEventFlags};
-                            let mac_kc = event.get_integer_value_field(
-                                EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                            use core_graphics::event::{CGEventFlags, EventField};
+                            let mac_kc = event
+                                .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                                as u32;
                             // Converter mac → HID. Sem mapa, descartar.
                             let hid = crate::input::keycodes::mac_to_hid(mac_kc)?;
                             let flags = event.get_flags();
                             let mut mods = Modifiers::NONE;
-                            if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
+                            if flags.contains(CGEventFlags::CGEventFlagShift) {
+                                mods = Modifiers(mods.0 | Modifiers::SHIFT.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagControl) {
+                                mods = Modifiers(mods.0 | Modifiers::CTRL.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+                                mods = Modifiers(mods.0 | Modifiers::ALT.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagCommand) {
+                                mods = Modifiers(mods.0 | Modifiers::META.0);
+                            }
                             let pressed = matches!(event_type, CGEventType::KeyDown);
-                            Some(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods })
+                            Some(InputEvent::KeyEvent {
+                                keycode: hid,
+                                pressed,
+                                modifiers: mods,
+                            })
                         }
                         CGEventType::FlagsChanged => {
-                            use core_graphics::event::{EventField, CGEventFlags};
-                            let mac_kc = event.get_integer_value_field(
-                                EventField::KEYBOARD_EVENT_KEYCODE) as u32;
+                            use core_graphics::event::{CGEventFlags, EventField};
+                            let mac_kc = event
+                                .get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)
+                                as u32;
                             let hid = match crate::input::keycodes::mac_to_hid(mac_kc) {
                                 Some(h) => h,
                                 None => return Some(event.to_owned()),
@@ -324,11 +434,23 @@ impl InputCapture for MacOsCapture {
                             };
                             let pressed = flags.bits() & mod_bit != 0;
                             let mut mods = Modifiers::NONE;
-                            if flags.contains(CGEventFlags::CGEventFlagShift)     { mods = Modifiers(mods.0 | Modifiers::SHIFT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagControl)   { mods = Modifiers(mods.0 | Modifiers::CTRL.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagAlternate) { mods = Modifiers(mods.0 | Modifiers::ALT.0); }
-                            if flags.contains(CGEventFlags::CGEventFlagCommand)   { mods = Modifiers(mods.0 | Modifiers::META.0); }
-                            Some(InputEvent::KeyEvent { keycode: hid, pressed, modifiers: mods })
+                            if flags.contains(CGEventFlags::CGEventFlagShift) {
+                                mods = Modifiers(mods.0 | Modifiers::SHIFT.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagControl) {
+                                mods = Modifiers(mods.0 | Modifiers::CTRL.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagAlternate) {
+                                mods = Modifiers(mods.0 | Modifiers::ALT.0);
+                            }
+                            if flags.contains(CGEventFlags::CGEventFlagCommand) {
+                                mods = Modifiers(mods.0 | Modifiers::META.0);
+                            }
+                            Some(InputEvent::KeyEvent {
+                                keycode: hid,
+                                pressed,
+                                modifiers: mods,
+                            })
                         }
                         _ => None,
                     };
@@ -371,7 +493,10 @@ impl InputCapture for MacOsCapture {
                     info!("MacOsCapture: loop encerrado");
                 }
                 Err(e) => {
-                    let msg = format!("CGEventTap falhou: {:?} — verifique permissão de Acessibilidade", e);
+                    let msg = format!(
+                        "CGEventTap falhou: {:?} — verifique permissão de Acessibilidade",
+                        e
+                    );
                     error!("{}", msg);
                     running.store(false, Ordering::SeqCst);
                     let _ = init_tx.send(Err(msg));
@@ -402,7 +527,7 @@ impl InputCapture for MacOsCapture {
     fn lock_cursor(&self, entry_x: f32, entry_y: f32) {
         use core_graphics::display::CGDisplay;
         let b = CGDisplay::main().bounds();
-        let cx = b.origin.x + b.size.width  / 2.0;
+        let cx = b.origin.x + b.size.width / 2.0;
         let cy = b.origin.y + b.size.height / 2.0;
 
         // Capturar a posição actual do cursor ANTES do warp — o unlock_cursor
@@ -417,9 +542,10 @@ impl InputCapture for MacOsCapture {
         *self.virt_pos.lock().unwrap_or_else(|p| p.into_inner()) = (entry_x, entry_y);
         *self.locked.lock().unwrap_or_else(|p| p.into_inner()) = true;
 
-        let _ = CGDisplay::warp_mouse_cursor_position(
-            core_graphics::geometry::CGPoint { x: cx, y: cy }
-        );
+        let _ = CGDisplay::warp_mouse_cursor_position(core_graphics::geometry::CGPoint {
+            x: cx,
+            y: cy,
+        });
 
         info!(
             "MacOsCapture: locked → warp para centro ({:.0},{:.0}); entry=({:.3},{:.3})",
@@ -433,21 +559,24 @@ impl InputCapture for MacOsCapture {
         // Restaurar cursor para a posição pré-lock, com margem de 80 px da
         // borda — evita o "mouse agarrando" em que o cursor reaparece no
         // centro depois do utilizador voltar do PC remoto.
-        let pre = self.pre_lock.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let pre = self
+            .pre_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
         if let Some((pre_x, pre_y)) = pre {
             use core_graphics::display::CGDisplay;
             let b = CGDisplay::main().bounds();
             const MARGIN: f64 = 80.0;
             let min_x = b.origin.x + MARGIN;
             let min_y = b.origin.y + MARGIN;
-            let max_x = b.origin.x + b.size.width  - MARGIN;
+            let max_x = b.origin.x + b.size.width - MARGIN;
             let max_y = b.origin.y + b.size.height - MARGIN;
             let x = pre_x.clamp(min_x, max_x);
             let y = pre_y.clamp(min_y, max_y);
             *self.prev_pos.lock().unwrap_or_else(|p| p.into_inner()) = (x, y);
-            let _ = CGDisplay::warp_mouse_cursor_position(
-                core_graphics::geometry::CGPoint { x, y }
-            );
+            let _ =
+                CGDisplay::warp_mouse_cursor_position(core_graphics::geometry::CGPoint { x, y });
             info!(
                 "MacOsCapture: unlocked → restaurado para ({:.0},{:.0}) (pre-lock + margem)",
                 x, y
@@ -463,12 +592,14 @@ impl InputCapture for MacOsCapture {
 pub struct MacOsInjector;
 
 impl MacOsInjector {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl InputInjector for MacOsInjector {
     fn inject(&self, event: InputEvent) -> Result<(), String> {
-        use core_graphics::event::{CGEvent, CGEventType, CGMouseButton, CGEventFlags};
+        use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton};
         use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
         use core_graphics::geometry::CGPoint;
 
@@ -514,7 +645,7 @@ impl InputInjector for MacOsInjector {
                             b.origin.y + prev_y * b.size.height,
                         ));
                         let gx = (cur_x + dx_px as f64)
-                            .clamp(b.origin.x, b.origin.x + b.size.width  - 1.0);
+                            .clamp(b.origin.x, b.origin.x + b.size.width - 1.0);
                         let gy = (cur_y + dy_px as f64)
                             .clamp(b.origin.y, b.origin.y + b.size.height - 1.0);
                         (gx, gy, dx_px, dy_px)
@@ -522,9 +653,12 @@ impl InputInjector for MacOsInjector {
                 };
 
                 let ev = CGEvent::new_mouse_event(
-                    source, CGEventType::MouseMoved,
-                    CGPoint { x: gx, y: gy }, CGMouseButton::Left,
-                ).map_err(|_| "Falha MouseMove".to_string())?;
+                    source,
+                    CGEventType::MouseMoved,
+                    CGPoint { x: gx, y: gy },
+                    CGMouseButton::Left,
+                )
+                .map_err(|_| "Falha MouseMove".to_string())?;
                 // Delta informativo para apps que consumam kCGMouseEventDeltaX/Y
                 if dx_px != 0 || dy_px != 0 {
                     ev.set_integer_value_field(EventField::MOUSE_EVENT_DELTA_X, dx_px);
@@ -535,29 +669,83 @@ impl InputInjector for MacOsInjector {
                 ev.post(core_graphics::event::CGEventTapLocation::Session);
             }
             InputEvent::MouseButton { button, pressed } => {
-                let (et, cb) = match (button, pressed) {
-                    (MouseButton::Left,  true)  => (CGEventType::LeftMouseDown,  CGMouseButton::Left),
-                    (MouseButton::Left,  false) => (CGEventType::LeftMouseUp,    CGMouseButton::Left),
-                    (MouseButton::Right, true)  => (CGEventType::RightMouseDown, CGMouseButton::Right),
-                    (MouseButton::Right, false) => (CGEventType::RightMouseUp,   CGMouseButton::Right),
-                    _ => return Ok(()),
+                use core_graphics::event::EventField;
+                // Left/Right usam o tipo dedicado; Middle/Button4/Button5 usam
+                // OtherMouseDown/Up. O número do botão (campo MOUSE_EVENT_BUTTON_NUMBER)
+                // identifica qual botão Other: 2 = Middle, 3 = Button4, 4 = Button5.
+                // O CGMouseButton da 0.23 só expõe Left/Right/Center; para os Other
+                // passamos Center como placeholder e definimos o número correto a seguir.
+                let (et, cb, other_btn_num) = match (button, pressed) {
+                    (MouseButton::Left, true) => {
+                        (CGEventType::LeftMouseDown, CGMouseButton::Left, None)
+                    }
+                    (MouseButton::Left, false) => {
+                        (CGEventType::LeftMouseUp, CGMouseButton::Left, None)
+                    }
+                    (MouseButton::Right, true) => {
+                        (CGEventType::RightMouseDown, CGMouseButton::Right, None)
+                    }
+                    (MouseButton::Right, false) => {
+                        (CGEventType::RightMouseUp, CGMouseButton::Right, None)
+                    }
+                    (MouseButton::Middle, true) => (
+                        CGEventType::OtherMouseDown,
+                        CGMouseButton::Center,
+                        Some(2i64),
+                    ),
+                    (MouseButton::Middle, false) => {
+                        (CGEventType::OtherMouseUp, CGMouseButton::Center, Some(2i64))
+                    }
+                    (MouseButton::Button4, true) => (
+                        CGEventType::OtherMouseDown,
+                        CGMouseButton::Center,
+                        Some(3i64),
+                    ),
+                    (MouseButton::Button4, false) => {
+                        (CGEventType::OtherMouseUp, CGMouseButton::Center, Some(3i64))
+                    }
+                    (MouseButton::Button5, true) => (
+                        CGEventType::OtherMouseDown,
+                        CGMouseButton::Center,
+                        Some(4i64),
+                    ),
+                    (MouseButton::Button5, false) => {
+                        (CGEventType::OtherMouseUp, CGMouseButton::Center, Some(4i64))
+                    }
                 };
                 let pos = get_cursor_position()
                     .map(|(x, y)| CGPoint { x, y })
                     .unwrap_or(CGPoint { x: 0.0, y: 0.0 });
                 let ev = CGEvent::new_mouse_event(source, et, pos, cb)
                     .map_err(|_| "Falha MouseButton".to_string())?;
+                if let Some(n) = other_btn_num {
+                    ev.set_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER, n);
+                }
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
             }
-            InputEvent::MouseScroll { dy, .. } => {
+            InputEvent::MouseScroll { dx, dy } => {
                 use core_graphics::event::EventField;
-                let ev = CGEvent::new(source.clone())
-                    .map_err(|_| "Falha Scroll".to_string())?;
+                // CGEvent::new_scroll_event está atrás da feature "highsierra" (não
+                // habilitada neste projecto), por isso usamos um ScrollWheel genérico
+                // e definimos AMBOS os eixos: AXIS_1 = vertical (dy), AXIS_2 =
+                // horizontal (dx), coerente com a captura.
+                let ev = CGEvent::new(source.clone()).map_err(|_| "Falha Scroll".to_string())?;
                 ev.set_type(CGEventType::ScrollWheel);
-                ev.set_integer_value_field(EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1, dy as i64);
+                ev.set_integer_value_field(
+                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
+                    dy as i64,
+                );
+                ev.set_integer_value_field(
+                    EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_2,
+                    dx as i64,
+                );
                 ev.post(core_graphics::event::CGEventTapLocation::HID);
             }
-            InputEvent::KeyEvent { keycode, pressed, modifiers } => {
+            InputEvent::KeyEvent {
+                keycode,
+                pressed,
+                modifiers,
+            } => {
                 // Converter HID → keycode macOS. Sem mapa, descartar para não
                 // chamar CGEvent com keycode arbitrário (poderia digitar lixo).
                 let Some(mac_kc) = crate::input::keycodes::hid_to_mac(keycode) else {
@@ -574,10 +762,18 @@ impl InputInjector for MacOsInjector {
                 let ev = CGEvent::new_keyboard_event(kb_source, mac_kc, pressed)
                     .map_err(|_| "Falha KeyEvent".to_string())?;
                 let mut flags = CGEventFlags::empty();
-                if modifiers.contains(Modifiers::SHIFT) { flags |= CGEventFlags::CGEventFlagShift; }
-                if modifiers.contains(Modifiers::CTRL)  { flags |= CGEventFlags::CGEventFlagControl; }
-                if modifiers.contains(Modifiers::ALT)   { flags |= CGEventFlags::CGEventFlagAlternate; }
-                if modifiers.contains(Modifiers::META)  { flags |= CGEventFlags::CGEventFlagCommand; }
+                if modifiers.contains(Modifiers::SHIFT) {
+                    flags |= CGEventFlags::CGEventFlagShift;
+                }
+                if modifiers.contains(Modifiers::CTRL) {
+                    flags |= CGEventFlags::CGEventFlagControl;
+                }
+                if modifiers.contains(Modifiers::ALT) {
+                    flags |= CGEventFlags::CGEventFlagAlternate;
+                }
+                if modifiers.contains(Modifiers::META) {
+                    flags |= CGEventFlags::CGEventFlagCommand;
+                }
                 ev.set_flags(flags);
                 ev.post(core_graphics::event::CGEventTapLocation::Session);
             }
@@ -591,7 +787,12 @@ impl InputInjector for MacOsInjector {
 fn normalize_mouse_standard(loc_x: f64, loc_y: f64) -> (f32, f32) {
     let (left, top, w, h) = crate::screen::layout::desktop_bounding_box_cached();
     crate::screen::layout::normalize_point_against_display_rect(
-        left, top, w, h, loc_x as i32, loc_y as i32,
+        left,
+        top,
+        w,
+        h,
+        loc_x as i32,
+        loc_y as i32,
     )
 }
 

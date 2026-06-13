@@ -92,8 +92,10 @@ pub async fn get_status(state: State<'_, SharedState>) -> Result<StatusPayload, 
 #[tauri::command]
 pub async fn get_settings(state: State<'_, SharedState>) -> Result<SettingsPayload, String> {
     let s = state.settings.lock().await;
-    // Expor apenas os primeiros 8 hex chars (4 bytes) para confirmação visual na UI
-    let psk_preview = format!("{}...", &s.psk_hex[..s.psk_hex.len().min(8)]);
+    // Expor apenas os primeiros 8 hex chars (4 bytes) para confirmação visual na UI.
+    // Fatiar por chars (não por bytes) evita panic se a PSK contiver chars multibyte.
+    let psk_preview: String = s.psk_hex.chars().take(8).collect();
+    let psk_preview = format!("{}...", psk_preview);
     Ok(SettingsPayload {
         hostname: s.hostname.clone(),
         screen_name: s.screen_name.clone(),

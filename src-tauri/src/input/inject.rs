@@ -1,6 +1,6 @@
-use std::sync::OnceLock;
 use crate::input::events::InputEvent;
 use crate::input::platform::{create_injector, InputInjector};
+use std::sync::OnceLock;
 use tracing::error;
 
 /// Injector singleton — criado uma única vez, reutilizado em todas as chamadas
@@ -23,4 +23,6 @@ pub fn inject_event(event: InputEvent) {
 pub fn set_mouse_sensitivity(_s: f64) {
     #[cfg(target_os = "macos")]
     crate::input::platform::macos::set_sensitivity(_s as f32);
+    #[cfg(target_os = "windows")]
+    crate::input::platform::windows::set_sensitivity(_s as f32);
 }

@@ -89,7 +89,10 @@ pub fn vk_to_hid(vk: u32) -> Option<u32> {
         0x6C => 0x85, // VK_SEPARATOR → Numpad ,
         // Tecla extra ABNT2 (entre Shift direito e Numpad /)
         0xC1 => 0x64, // VK_ABNT_C1  → Non-US /|
-        0xC2 => 0x63, // VK_ABNT_C2  → Numpad . (ABNT2)
+        // VK_ABNT_C2 é a vírgula do teclado numérico ABNT2; o HID dedicado é
+        // 0x85 (Keypad Comma), distinto do ponto decimal US (0x63). Mapear aqui
+        // permite o roundtrip vk↔hid fechar sem colidir com VK_DECIMAL (0x63).
+        0xC2 => 0x85, // VK_ABNT_C2  → Keypad Comma (ABNT2)
         // Teclas de sistema / navegação
         0x2C => 0x46, // VK_SNAPSHOT → Print Screen
         0x91 => 0x47, // VK_SCROLL   → Scroll Lock
@@ -177,17 +180,29 @@ pub fn hid_to_vk(hid: u32) -> Option<u16> {
         0x60 => 0x68, // Numpad 8
         0x61 => 0x69, // Numpad 9
         0x62 => 0x60, // Numpad 0
-        0x63 => 0x6E, // Numpad .
+        0x63 => 0x6E, // Numpad . (VK_DECIMAL)
         0x64 => 0xC1, // Non-US /| → VK_ABNT_C1
-        0x85 => 0x6C, // Numpad ,
+        // Keypad Comma (ABNT2) → VK_ABNT_C2, fechando o roundtrip da vírgula BR.
+        // VK_SEPARATOR (0x6C) também mapeia para 0x85 no sentido direto (alias),
+        // mas o reverso prioriza a tecla ABNT2, relevante para teclados BR.
+        0x85 => 0xC2, // Keypad Comma → VK_ABNT_C2
         // Teclas de sistema
         0x46 => 0x2C, // Print Screen
         0x47 => 0x91, // Scroll Lock
         0x48 => 0x13, // Pause
         // F13-F24
-        0x68 => 0x7C, 0x69 => 0x7D, 0x6A => 0x7E, 0x6B => 0x7F,
-        0x6C => 0x80, 0x6D => 0x81, 0x6E => 0x82, 0x6F => 0x83,
-        0x70 => 0x84, 0x71 => 0x85, 0x72 => 0x86, 0x73 => 0x87,
+        0x68 => 0x7C,
+        0x69 => 0x7D,
+        0x6A => 0x7E,
+        0x6B => 0x7F,
+        0x6C => 0x80,
+        0x6D => 0x81,
+        0x6E => 0x82,
+        0x6F => 0x83,
+        0x70 => 0x84,
+        0x71 => 0x85,
+        0x72 => 0x86,
+        0x73 => 0x87,
         _ => return None,
     };
     Some(vk)

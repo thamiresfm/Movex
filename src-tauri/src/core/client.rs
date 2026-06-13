@@ -10,7 +10,9 @@ use crate::input::events::InputEvent;
 use crate::input::inject::inject_event;
 use crate::network::protocol::{Message, PROTOCOL_VERSION};
 use crate::network::reconnect::ReconnectPolicy;
-use crate::network::transport::{create_tls_connector, recv_message, recv_message_counted, send_message};
+use crate::network::transport::{
+    create_tls_connector, recv_message, recv_message_counted, send_message, send_message_flushed,
+};
 use crate::screen::boundary::{check_boundary, BoundaryResult};
 use crate::screen::layout::{PeerPosition, ScreenLayout, ScreenResolution};
 
@@ -105,13 +107,25 @@ pub async fn connect_to_addr(
     let (connector, tofu_verifier) = create_tls_connector(known_fp);
     let domain = ServerName::try_from("movex.local").expect("domínio inválido");
 
-    let mut tls = match connector.connect(domain, tcp).await {
-        Ok(s) => s,
-        Err(e) => {
+    let mut tls = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        connector.connect(domain, tcp),
+    ).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             warn!("Falha TLS ao conectar em {}: {}", target, e);
             state.user_visible_connection_error(
                 "Movex — TLS",
                 "Falha no handshake TLS. Se o servidor foi reinstalado, apague o arquivo de confiança: em Configurações use «Resetar» ou remova server_cert em ~/.movex nas duas máquinas.",
+            ).await;
+            connection_failed_client(&state).await;
+            return;
+        }
+        Err(_) => {
+            warn!("Timeout no handshake TLS ao conectar em {}", target);
+            state.user_visible_connection_error(
+                "Movex — TLS",
+                "Tempo esgotado no handshake TLS. Verifique rede e firewall no PC servidor.",
             ).await;
             connection_failed_client(&state).await;
             return;
@@ -366,11 +380,58 @@ pub async fn connect(state: SharedState, cancel: CancellationToken) {
         match connect_result {
             Ok(Ok(tcp)) => {
                 tcp_unreachable_streak = 0;
+
+                // TCP keepalive: previne que NATs/routers derrubem a conexão por inatividade
+                let tcp = {
+                    use socket2::{Socket, TcpKeepalive};
+                    match tcp.into_std() {
+                        Ok(std_s) => {
+                            let sock = Socket::from(std_s);
+                            let ka = TcpKeepalive::new()
+                                .with_time(std::time::Duration::from_secs(5))
+                                .with_interval(std::time::Duration::from_secs(2));
+                            let _ = sock.set_tcp_keepalive(&ka);
+                            match tokio::net::TcpStream::from_std(sock.into()) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    warn!("Falha ao recriar TcpStream com keepalive: {}", e);
+                                    connection_failed_client(&state).await;
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Falha ao converter TcpStream para socket2: {}", e);
+                            connection_failed_client(&state).await;
+                            return;
+                        }
+                    }
+                };
+
                 let known_fp = state.settings.lock().await.server_cert_fingerprint.clone();
                 let (connector, tofu_verifier) = create_tls_connector(known_fp);
                 let domain = ServerName::try_from("movex.local").expect("domínio inválido");
 
-                match connector.connect(domain, tcp).await {
+                let tls_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    connector.connect(domain, tcp),
+                ).await;
+                let tls_result = match tls_result {
+                    Ok(r) => r,
+                    Err(_) => {
+                        warn!("Timeout no handshake TLS ao conectar em {}", addr);
+                        state
+                            .user_visible_connection_error(
+                                "Movex — TLS",
+                                "Tempo esgotado no handshake TLS. Verifique rede e firewall no PC servidor.",
+                            )
+                            .await;
+                        connection_failed_client(&state).await;
+                        return;
+                    }
+                };
+
+                match tls_result {
                     Ok(mut tls) => {
                         let server_was_trusted = {
                             let mut settings = state.settings.lock().await;
@@ -558,7 +619,10 @@ async fn run_session<S>(
         }
     };
 
-    let monitors = crate::screen::layout::detect_monitors();
+    // detect_monitors faz I/O síncrono — evita bloquear a runtime Tokio.
+    let monitors = tokio::task::spawn_blocking(crate::screen::layout::detect_monitors)
+        .await
+        .unwrap_or_default();
     let (_, _, bbox_w, bbox_h) = monitors.bounding_box();
     let primary = monitors
         .monitors
@@ -599,7 +663,7 @@ async fn run_session<S>(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                let _ = send_message(stream, &Message::Disconnect {
+                let _ = send_message_flushed(stream, &Message::Disconnect {
                     reason: "cliente encerrado".into(),
                 }).await;
                 break;
@@ -617,7 +681,7 @@ async fn run_session<S>(
 
             _ = ping_interval.tick() => {
                 ping_sent_at = Some(std::time::Instant::now());
-                if send_message(stream, &Message::Ping).await.is_err() { break; }
+                if send_message_flushed(stream, &Message::Ping).await.is_err() { break; }
             }
 
             _ = clipboard_check.tick() => {
@@ -625,7 +689,9 @@ async fn run_session<S>(
                     if let Ok(s) = state.settings.try_lock() {
                         s.clipboard_sync_enabled
                     } else {
-                        false
+                        // Lock ocupado: assume habilitado (otimista) — a próxima
+                        // iteração reavalia. Não desativa a feature silenciosamente.
+                        true
                     }
                 };
                 if !sync_enabled { continue; }
@@ -752,6 +818,7 @@ async fn run_session<S>(
                         // Só injetar se o cursor ainda está nesta máquina — impede
                         // injeção do MouseMove de borda que disparou edge_enter=true.
                         if state.active_screen_remote.load(Ordering::Acquire) {
+                            state.stats.inc_event_received();
                             inject_event(event);
                         }
                     }
@@ -787,9 +854,15 @@ async fn run_session<S>(
                     }
                     Message::FileRetry { id } => {
                         warn!("Peer solicitou reenvio do arquivo id={}", id);
+                        let st = state.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = crate::ipc::transfer::resend_file(&st, id).await {
+                                warn!("FileRetry: reenvio falhou: {}", e);
+                            }
+                        });
                     }
                     Message::Ping => {
-                        let _ = send_message(stream, &Message::Pong).await;
+                        let _ = send_message_flushed(stream, &Message::Pong).await;
                     }
                     Message::Pong => {
                         if let Some(sent) = ping_sent_at.take() {
@@ -819,6 +892,10 @@ async fn run_session<S>(
     drop(status);
     drop(started);
     state.stats.reset();
+    // Reset de estado de tela (simetria com o servidor): garante que o cursor volta
+    // ao modo local ao fim da sessão, evitando ficar preso em "remoto".
+    state.active_screen_remote.store(false, Ordering::Release);
+    *state.active_screen.lock().await = ActiveScreen::Local;
     crate::ipc::emit_status_to_main(&state).await;
 }
 

@@ -6,12 +6,17 @@ export async function renderSetup(): Promise<void> {
   const settings = await invoke<any>("get_settings").catch(() => ({
     hostname: "Meu Computador",
     psk_hex: "0000000000000000000000000000000000000000000000000000000000000000",
+    port: 24800,
+    peer_position: "right",
   }));
 
-  const formatPsk = (hex: string) =>
-    [hex.slice(0,8), hex.slice(8,16), hex.slice(16,24), hex.slice(24,32)]
+  // Guarda contra psk_hex undefined/curto: usa fallback de zeros antes de fatiar.
+  const formatPsk = (hex: string | undefined | null) => {
+    const safe = (hex ?? "").padEnd(32, "0");
+    return [safe.slice(0,8), safe.slice(8,16), safe.slice(16,24), safe.slice(24,32)]
       .map(s => s.toUpperCase())
       .join("-");
+  };
 
   app.innerHTML = `
     <div style="min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:32px 24px 100px;background:var(--bg);position:relative;overflow-y:auto;">
@@ -33,9 +38,9 @@ export async function renderSetup(): Promise<void> {
         </p>
 
         <div style="display:flex;gap:8px;justify-content:center;margin-bottom:36px;">
-          <div style="width:48px;height:3px;border-radius:2px;background:var(--cyan);"></div>
-          <div style="width:48px;height:3px;border-radius:2px;background:var(--bg-5);"></div>
-          <div style="width:48px;height:3px;border-radius:2px;background:var(--bg-5);"></div>
+          <div id="progress-1" style="width:48px;height:3px;border-radius:2px;background:var(--cyan);"></div>
+          <div id="progress-2" style="width:48px;height:3px;border-radius:2px;background:var(--bg-5);"></div>
+          <div id="progress-3" style="width:48px;height:3px;border-radius:2px;background:var(--bg-5);"></div>
         </div>
 
         <div id="step-1">
@@ -70,24 +75,15 @@ export async function renderSetup(): Promise<void> {
               <input id="hostnameInput" type="text"
                 style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'Inter',sans-serif;font-size:13px;color:var(--text);outline:none;" />
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Porta TCP</label>
-                <input id="portInput" type="number" value="${settings.port ?? 24800}"
-                  style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Posição do outro monitor</label>
-                <select id="peerPositionInput"
-                  style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-size:13px;color:var(--text);outline:none;">
-                  <option value="right" ${(settings.peer_position ?? 'right') === 'right' ? 'selected' : ''}>→ À Direita</option>
-                  <option value="left"  ${settings.peer_position === 'left'  ? 'selected' : ''}>← À Esquerda</option>
-                  <option value="above" ${settings.peer_position === 'above' ? 'selected' : ''}>↑ Acima</option>
-                  <option value="below" ${settings.peer_position === 'below' ? 'selected' : ''}>↓ Abaixo</option>
-                </select>
-              </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Porta TCP</label>
+              <input id="portInput" type="number" value="${settings.port ?? 24800}"
+                style="width:100%;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text);outline:none;" />
             </div>
           </div>
+
+          <!-- Erro inline do passo 1 (substitui alert) -->
+          <div id="step1-error" style="display:none;font-size:12px;font-weight:600;color:var(--danger);margin-bottom:14px;"></div>
 
           <div style="display:flex;align-items:center;justify-content:space-between;padding-top:4px;">
             <span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.3px;">ℹ Precisa de ajuda? Ver documentação</span>
@@ -98,14 +94,44 @@ export async function renderSetup(): Promise<void> {
           </div>
         </div>
 
+        <!-- Passo 2: Posição das telas (matriz de setas) -->
         <div id="step-2" style="display:none;">
+          <p style="font-size:13px;color:var(--text-2);text-align:center;margin-bottom:20px;line-height:1.6;">
+            Clique numa seta para definir onde o outro monitor fica em relação a este. O cursor passará para o outro PC ao tocar nessa borda.
+          </p>
+          <div style="display:flex;justify-content:center;margin-bottom:18px;">
+            <div style="padding:18px;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:6px;width:168px;">
+                <div></div>
+                <button id="pos-above" class="btn btn-outline" style="padding:10px;font-size:16px;">↑</button>
+                <div></div>
+                <button id="pos-left"  class="btn btn-outline" style="padding:10px;font-size:16px;">←</button>
+                <div style="background:var(--cyan-dim);border:1px solid var(--border-c);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--cyan);">📍</div>
+                <button id="pos-right" class="btn btn-cyan"    style="padding:10px;font-size:16px;">→</button>
+                <div></div>
+                <button id="pos-below" class="btn btn-outline" style="padding:10px;font-size:16px;">↓</button>
+                <div></div>
+              </div>
+            </div>
+          </div>
+          <p id="posLabel" style="font-size:12px;color:var(--text-3);text-align:center;margin-bottom:28px;">Posição selecionada: <strong style="color:var(--cyan);">À Direita</strong></p>
+          <div style="display:flex;gap:12px;justify-content:flex-end;">
+            <button id="btnBack2" class="btn-ghost">← Voltar</button>
+            <button id="btnNext2" class="btn-primary">Próximo Passo</button>
+          </div>
+        </div>
+
+        <!-- Passo 3: Chave PSK e conclusão -->
+        <div id="step-3" style="display:none;">
           <div style="background:var(--bg-2);border:1px solid var(--border-c);border-radius:12px;padding:20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
             <code id="pskDisplay" style="font-family:monospace;font-size:18px;letter-spacing:3px;color:var(--cyan);word-break:break-all;">${formatPsk(settings.psk_hex)}</code>
             <button class="btn btn-outline" id="btnCopy">Copiar</button>
           </div>
-          <p style="font-size:12px;color:var(--text-3);margin-bottom:28px;">💡 Esta chave é opcional; não é preciso copiá-la para o outro PC. A ligação usa TLS.</p>
+          <p style="font-size:12px;color:var(--text-3);margin-bottom:18px;">💡 Esta chave é opcional; não é preciso copiá-la para o outro PC. A ligação usa TLS.</p>
+          <!-- Erro inline do passo 3 (substitui reload silencioso) -->
+          <div id="step3-error" style="display:none;font-size:12px;font-weight:600;color:var(--danger);margin-bottom:18px;"></div>
           <div style="display:flex;gap:12px;justify-content:flex-end;">
-            <button id="btnBack2" class="btn-ghost">← Voltar</button>
+            <button id="btnBack3" class="btn-ghost">← Voltar</button>
             <button id="btnFinish" class="btn-primary">Concluir Configuração ✓</button>
           </div>
         </div>
@@ -131,6 +157,17 @@ export async function renderSetup(): Promise<void> {
   if (hostnameInput) hostnameInput.value = settings.hostname;
 
   let selectedMode = 'server';
+  // Posição do outro monitor escolhida na matriz de setas (passo 2).
+  let peerPosition = (settings.peer_position as string) || 'right';
+
+  // ── Helpers de erro inline (substituem os alert/reload silenciosos) ──
+  const setError = (id: string, msg: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+  };
+  const clearError = (id: string) => setError(id, '');
 
   const selectMode = (mode: string) => {
     selectedMode = mode;
@@ -146,20 +183,48 @@ export async function renderSetup(): Promise<void> {
       server.style.cssText += ';border-color:var(--border);box-shadow:none;background:var(--bg-3);';
       addrField.style.display = 'block';
     }
+    // Trocar de modo limpa qualquer erro de validação anterior.
+    clearError('step1-error');
+  };
+
+  // ── Matriz de setas: define peer_position (passo 2) ──
+  const POSITIONS = ['above', 'below', 'left', 'right'] as const;
+  const POSITION_LABELS: Record<string, string> = {
+    above: 'Acima', below: 'Abaixo', left: 'À Esquerda', right: 'À Direita',
+  };
+  const renderPositionMatrix = () => {
+    POSITIONS.forEach(p => {
+      const btn = document.getElementById(`pos-${p}`);
+      if (btn) {
+        btn.className = p === peerPosition ? 'btn btn-cyan' : 'btn btn-outline';
+        (btn as HTMLButtonElement).style.cssText = 'padding:10px;font-size:16px;';
+      }
+    });
+    const label = document.getElementById('posLabel');
+    if (label) {
+      label.innerHTML = `Posição selecionada: <strong style="color:var(--cyan);">${POSITION_LABELS[peerPosition] ?? peerPosition}</strong>`;
+    }
+  };
+  const selectPosition = (p: string) => {
+    peerPosition = p;
+    renderPositionMatrix();
   };
 
   const showStep = (n: number) => {
     (document.getElementById('step-1') as HTMLElement).style.display = n === 1 ? 'block' : 'none';
     (document.getElementById('step-2') as HTMLElement).style.display = n === 2 ? 'block' : 'none';
+    (document.getElementById('step-3') as HTMLElement).style.display = n === 3 ? 'block' : 'none';
+    // Barra de progresso reflete os 3 passos reais.
+    for (let i = 1; i <= 3; i++) {
+      const bar = document.getElementById(`progress-${i}`);
+      if (bar) bar.style.background = i <= n ? 'var(--cyan)' : 'var(--bg-5)';
+    }
+    if (n === 2) renderPositionMatrix();
   };
 
-  const goToStep2 = async () => {
-    const hostname = (document.getElementById('hostnameInput') as HTMLInputElement).value.trim();
-    const serverAddr = (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null;
-    if (!hostname) { alert('Digite o nome desta máquina.'); return; }
-    const port = parseInt((document.getElementById('portInput') as HTMLInputElement)?.value) || 24800;
-    const peerPosition = (document.getElementById('peerPositionInput') as HTMLSelectElement)?.value || 'right';
-    await invoke('save_settings', {
+  // Persiste as configurações com a posição atual; usado ao avançar e ao concluir.
+  const persistSettings = (hostname: string, serverAddr: string | null, port: number) =>
+    invoke('save_settings', {
       hostname,
       screenName: hostname,
       expectedClientScreenName: null,
@@ -171,20 +236,60 @@ export async function renderSetup(): Promise<void> {
       peerPosition,
       autostart: false,
       theme: 'dark',
-    }).catch(console.warn);
+    });
+
+  // Lê e valida os campos do passo 1.
+  const readStep1 = (): { hostname: string; serverAddr: string | null; port: number } | null => {
+    clearError('step1-error');
+    const hostname = (document.getElementById('hostnameInput') as HTMLInputElement).value.trim();
+    const serverAddr = (document.getElementById('serverAddrInput') as HTMLInputElement)?.value.trim() || null;
+    if (!hostname) { setError('step1-error', 'Digite o nome desta máquina.'); return null; }
+    // Cliente exige endereço do servidor: não deixar salvar silenciosamente sem ele.
+    if (selectedMode === 'client' && !serverAddr) {
+      setError('step1-error', 'Informe o endereço do servidor para o modo Cliente.');
+      return null;
+    }
+    const port = parseInt((document.getElementById('portInput') as HTMLInputElement)?.value) || 24800;
+    return { hostname, serverAddr, port };
+  };
+
+  const goToStep2 = async () => {
+    const fields = readStep1();
+    if (!fields) return;
+    await persistSettings(fields.hostname, fields.serverAddr, fields.port).catch(console.warn);
     showStep(2);
   };
 
-  const copyPsk = () => {
-    navigator.clipboard.writeText(settings.psk_hex);
+  const goToStep3 = async () => {
+    // Revalida os campos do passo 1 (cliente sem endereço continua bloqueado).
+    const fields = readStep1();
+    if (!fields) { showStep(1); return; }
+    await persistSettings(fields.hostname, fields.serverAddr, fields.port).catch(console.warn);
+    showStep(3);
+  };
+
+  const copyPsk = async () => {
     const btn = document.getElementById('btnCopy')!;
-    btn.textContent = '✓ Copiado!';
+    try {
+      await navigator.clipboard.writeText(settings.psk_hex ?? '');
+      btn.textContent = '✓ Copiado!';
+    } catch (e) {
+      console.warn('Falha ao copiar PSK', e);
+      btn.textContent = '✗ Falhou';
+    }
     setTimeout(() => { btn.textContent = 'Copiar'; }, 2000);
   };
 
   const finishSetup = async () => {
-    await invoke('complete_setup').catch(console.warn);
-    window.location.reload();
+    clearError('step3-error');
+    try {
+      await invoke('complete_setup');
+      // Só recarrega em sucesso; em falha mostramos erro e permanecemos no Setup.
+      window.location.reload();
+    } catch (e) {
+      console.warn('Falha ao concluir configuração', e);
+      setError('step3-error', 'Não foi possível concluir a configuração. Tente novamente.');
+    }
   };
 
   // ── Registrar eventos via addEventListener (CSP do Tauri bloqueia onclick inline) ──
@@ -192,9 +297,15 @@ export async function renderSetup(): Promise<void> {
     el.addEventListener('click', () => selectMode((el as HTMLElement).dataset.mode!));
   });
 
+  POSITIONS.forEach(p => {
+    document.getElementById(`pos-${p}`)?.addEventListener('click', () => selectPosition(p));
+  });
+
   document.getElementById('btnNext')?.addEventListener('click', goToStep2);
   document.getElementById('btnBack1')?.addEventListener('click', () => {});
   document.getElementById('btnBack2')?.addEventListener('click', () => showStep(1));
+  document.getElementById('btnNext2')?.addEventListener('click', goToStep3);
+  document.getElementById('btnBack3')?.addEventListener('click', () => showStep(2));
   document.getElementById('btnCopy')?.addEventListener('click', copyPsk);
   document.getElementById('btnFinish')?.addEventListener('click', finishSetup);
 }

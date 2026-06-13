@@ -14,10 +14,15 @@ struct Transfer {
     received_bytes: u64,
     expected_size: u64,
     expected_seq: u32,
+    /// Caminho do arquivo de staging (.movex-{id}.tmp) no diretório de staging.
+    tmp: PathBuf,
 }
 
 pub struct FileReceiver {
+    /// Destino final: ~/Downloads/Movex/{nome}
     downloads_dir: PathBuf,
+    /// Staging para os .tmp em andamento: ~/.movex/Movex/.movex-{id}.tmp
+    staging_dir: PathBuf,
     transfers: HashMap<u32, Transfer>,
 }
 
@@ -27,7 +32,55 @@ impl FileReceiver {
             .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
             .join("Movex");
         tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
-        Ok(Self { downloads_dir: dir, transfers: HashMap::new() })
+
+        // Staging separado do destino final, em ~/.movex/Movex.
+        let staging = dirs::home_dir()
+            .unwrap_or_default()
+            .join(".movex")
+            .join("Movex");
+        tokio::fs::create_dir_all(&staging).await.map_err(|e| e.to_string())?;
+
+        // Limpeza de tmp órfãos deixados por recebimentos interrompidos.
+        Self::cleanup_orphan_tmps(&staging).await;
+
+        Ok(Self { downloads_dir: dir, staging_dir: staging, transfers: HashMap::new() })
+    }
+
+    /// Remove arquivos `.movex-*.tmp` antigos do diretório de staging.
+    /// Por segurança remove apenas dentro do próprio staging e apenas arquivos
+    /// que casam exatamente com o padrão de nome do staging (`.movex-*.tmp`).
+    async fn cleanup_orphan_tmps(staging_dir: &Path) {
+        let mut entries = match tokio::fs::read_dir(staging_dir).await {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            // Só remover arquivos regulares, nunca diretórios/symlinks de diretório.
+            let is_file = match entry.file_type().await {
+                Ok(ft) => ft.is_file(),
+                Err(_) => false,
+            };
+            if !is_file {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            if name.starts_with(".movex-") && name.ends_with(".tmp") {
+                // Só remover órfãos antigos (>1h): evita apagar uma transferência
+                // em andamento de outra instância do app rodando em paralelo.
+                let old_enough = entry
+                    .metadata()
+                    .await
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|age| age > std::time::Duration::from_secs(3600))
+                    .unwrap_or(false);
+                if old_enough {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
     }
 
     pub async fn on_file_start(&mut self, id: u32, name: String, size: u64) -> Result<(), String> {
@@ -37,17 +90,21 @@ impl FileReceiver {
             .ok_or_else(|| format!("Nome de arquivo inválido: '{}'", name))?
             .to_string_lossy()
             .to_string();
+        // Rejeitar nomes começando com '.' é defensivo: além de evitar criar
+        // arquivos ocultos no destino, impede que o nome final colida/confunda
+        // com o padrão de staging (`.movex-*.tmp`).
         if safe_name.is_empty() || safe_name.starts_with('.') {
             return Err(format!("Nome de arquivo rejeitado: '{}'", safe_name));
         }
 
-        let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
+        // O staging (.tmp) vive em ~/.movex/Movex; o destino final em ~/Downloads/Movex.
+        let tmp = self.staging_dir.join(format!(".movex-{}.tmp", id));
         let file = File::create(&tmp).await.map_err(|e| e.to_string())?;
         info!("Recebendo '{}' ({} bytes, id={}) → {:?}", safe_name, size, id, tmp);
         let name = safe_name;
         self.transfers.insert(
             id,
-            Transfer { file, name, hasher: Sha256::new(), received_bytes: 0, expected_size: size, expected_seq: 0 },
+            Transfer { file, name, hasher: Sha256::new(), received_bytes: 0, expected_size: size, expected_seq: 0, tmp },
         );
         Ok(())
     }
@@ -93,8 +150,7 @@ impl FileReceiver {
             .remove(&id)
             .ok_or_else(|| format!("Transferência {} não encontrada", id))?;
         if t.received_bytes != t.expected_size {
-            let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
-            let _ = tokio::fs::remove_file(&tmp).await;
+            let _ = tokio::fs::remove_file(&t.tmp).await;
             error!("Tamanho incorreto para '{}': esperado={}, recebido={}", t.name, t.expected_size, t.received_bytes);
             return Err(format!(
                 "Tamanho recebido ({}) difere do declarado ({}) para '{}'",
@@ -105,8 +161,7 @@ impl FileReceiver {
         let computed: [u8; 32] = t.hasher.finalize().into();
 
         if computed != checksum {
-            let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
-            let _ = tokio::fs::remove_file(&tmp).await;
+            let _ = tokio::fs::remove_file(&t.tmp).await;
             error!("Checksum inválido para '{}'", t.name);
             return Err(format!("Checksum inválido para '{}'", t.name));
         }
@@ -117,17 +172,28 @@ impl FileReceiver {
         t.file.flush().await.map_err(|e| e.to_string())?;
         t.file.sync_all().await.map_err(|e| e.to_string())?;
 
-        let tmp = self.downloads_dir.join(format!(".movex-{}.tmp", id));
         let dest = match self.unique_path(&self.downloads_dir.join(&t.name)) {
             Ok(p) => p,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&tmp).await;
+                let _ = tokio::fs::remove_file(&t.tmp).await;
                 return Err(e);
             }
         };
-        if let Err(e) = tokio::fs::rename(&tmp, &dest).await {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            return Err(format!("Falha ao mover arquivo para destino: {}", e));
+        // O staging (~/.movex/Movex) e o destino (~/Downloads/Movex) costumam estar
+        // no mesmo volume, então o rename é atômico e barato. Se estiverem em volumes
+        // diferentes (raro para o mesmo usuário), o rename falha com cross-device:
+        // nesse caso fazemos fallback para copy + remove do tmp.
+        if let Err(e) = tokio::fs::rename(&t.tmp, &dest).await {
+            match tokio::fs::copy(&t.tmp, &dest).await {
+                Ok(_) => {
+                    let _ = tokio::fs::remove_file(&t.tmp).await;
+                }
+                Err(e2) => {
+                    let _ = tokio::fs::remove_file(&t.tmp).await;
+                    error!("Falha ao mover arquivo para destino: rename={}, copy={}", e, e2);
+                    return Err("Falha ao mover arquivo para destino".to_string());
+                }
+            }
         }
         info!("Arquivo '{}' recebido → {:?}", t.name, dest);
         Ok((t.name, dest))
@@ -159,15 +225,24 @@ impl FileReceiver {
 mod tests {
     use super::*;
 
+    /// Cria um FileReceiver para testes com staging e destino dentro do mesmo
+    /// tempdir (mesmo volume, garante rename atômico).
+    fn test_receiver(dir: &tempfile::TempDir) -> FileReceiver {
+        let staging = dir.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        FileReceiver {
+            downloads_dir: dir.path().to_path_buf(),
+            staging_dir: staging,
+            transfers: HashMap::new(),
+        }
+    }
+
     #[tokio::test]
     async fn receiver_full_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Substituir downloads_dir pelo tempdir para o teste
-        let mut receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        // Substituir downloads_dir/staging_dir pelo tempdir para o teste
+        let mut receiver = test_receiver(&dir);
 
         let content = b"dados de teste do receiver";
         let mut hasher = Sha256::new();
@@ -186,10 +261,7 @@ mod tests {
     #[tokio::test]
     async fn receiver_rejects_bad_checksum() {
         let dir = tempfile::tempdir().unwrap();
-        let mut receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        let mut receiver = test_receiver(&dir);
 
         receiver.on_file_start(2, "bad.bin".to_string(), 5).await.unwrap();
         receiver.on_file_chunk(2, 0, b"hello".to_vec()).await.unwrap();
@@ -203,10 +275,7 @@ mod tests {
     #[tokio::test]
     async fn receiver_chunk_on_unknown_id_returns_error() {
         let dir = tempfile::tempdir().unwrap();
-        let mut receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        let mut receiver = test_receiver(&dir);
         let result = receiver.on_file_chunk(99, 0, vec![1, 2, 3]).await;
         assert!(result.is_err());
     }
@@ -216,10 +285,7 @@ mod tests {
     #[tokio::test]
     async fn tamanho_declarado_nao_validado() {
         let dir = tempfile::tempdir().unwrap();
-        let mut receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        let mut receiver = test_receiver(&dir);
 
         let content = b"hello";
         let mut hasher = Sha256::new();
@@ -241,10 +307,7 @@ mod tests {
     #[tokio::test]
     async fn chunk_acima_do_limite_rejeitado() {
         let dir = tempfile::tempdir().unwrap();
-        let mut receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        let mut receiver = test_receiver(&dir);
 
         // Chunk de 128 KB (2× o limite de 64 KB)
         let big_chunk = vec![0xABu8; 128 * 1024];
@@ -259,10 +322,7 @@ mod tests {
     #[test]
     fn unique_path_exaurido_retorna_erro() {
         let dir = tempfile::tempdir().unwrap();
-        let receiver = FileReceiver {
-            downloads_dir: dir.path().to_path_buf(),
-            transfers: HashMap::new(),
-        };
+        let receiver = test_receiver(&dir);
 
         let base = dir.path().join("col.txt");
         std::fs::write(&base, b"").unwrap();

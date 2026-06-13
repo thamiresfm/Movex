@@ -57,20 +57,36 @@ fn discover_peers_blocking(timeout_secs: u64) -> Vec<DiscoveredPeer> {
     while std::time::Instant::now() < deadline {
         match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(ServiceEvent::ServiceResolved(info)) => {
+                // Não confiar cegamente na LAN: valida os dados anunciados antes de aceitar.
+                let port = info.get_port();
+                if port == 0 {
+                    warn!("mDNS: anúncio descartado (porta inválida: 0)");
+                    continue;
+                }
+                let hostname = info.get_hostname().trim_end_matches('.').to_string();
+                if hostname.is_empty() {
+                    warn!("mDNS: anúncio descartado (hostname vazio)");
+                    continue;
+                }
+                if hostname.len() > 253 {
+                    warn!("mDNS: anúncio descartado (hostname muito longo: {} chars)", hostname.len());
+                    continue;
+                }
                 let addrs: Vec<std::net::IpAddr> =
                     info.get_addresses().iter().copied().collect();
                 if let Some(addr) = pick_preferred_lan_address(&addrs) {
                     let peer = DiscoveredPeer {
-                        hostname: info.get_hostname().trim_end_matches('.').to_string(),
+                        hostname,
                         addr: addr.to_string(),
-                        port: info.get_port(),
+                        port,
                     };
                     info!("Peer descoberto: {} ({}:{})", peer.hostname, peer.addr, peer.port);
-                    peers.insert(peer.hostname.clone(), peer);
+                    // Usa o fullname do serviço como chave para casar com ServiceRemoved.
+                    peers.insert(info.get_fullname().to_string(), peer);
                 }
             }
-            Ok(ServiceEvent::ServiceRemoved(_, name)) => {
-                peers.remove(&name);
+            Ok(ServiceEvent::ServiceRemoved(_, fullname)) => {
+                peers.remove(&fullname);
             }
             Ok(other) => {
                 debug!("mDNS: evento {:?}", other);

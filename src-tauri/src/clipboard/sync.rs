@@ -1,5 +1,5 @@
-use tracing::{debug, info, warn};
 use crate::network::protocol::{Message, CLIPBOARD_MAX_BYTES};
+use tracing::{debug, info, warn};
 
 // ── Leitura do clipboard ──────────────────────────────────────────────────────
 
@@ -27,16 +27,32 @@ pub fn create_clipboard_message() -> Option<Message> {
     let text = read_clipboard()?;
     let data = text.into_bytes();
     if data.len() > CLIPBOARD_MAX_BYTES {
-        warn!("Clipboard texto excede {}MB — ignorado", CLIPBOARD_MAX_BYTES / 1024 / 1024);
+        warn!(
+            "Clipboard texto excede {}MB — ignorado",
+            CLIPBOARD_MAX_BYTES / 1024 / 1024
+        );
         return None;
     }
     debug!("Clipboard texto: {} bytes", data.len());
-    Some(Message::ClipboardData { mime: "text/plain".to_string(), data })
+    Some(Message::ClipboardData {
+        mime: "text/plain".to_string(),
+        data,
+    })
 }
 
 pub fn apply_clipboard_message(msg: &Message) {
     if let Message::ClipboardData { mime, data } = msg {
         if mime == "text/plain" {
+            // Aplicar o mesmo limite de tamanho do envio também na recepção.
+            // Sem isto, um peer poderia enviar até o máximo do protocolo e
+            // escrever tudo no clipboard local.
+            if data.len() > CLIPBOARD_MAX_BYTES {
+                warn!(
+                    "Clipboard recebido excede {}MB — ignorado",
+                    CLIPBOARD_MAX_BYTES / 1024 / 1024
+                );
+                return;
+            }
             if let Ok(text) = std::str::from_utf8(data) {
                 write_clipboard(text);
                 info!("Clipboard texto sincronizado: {} bytes", data.len());

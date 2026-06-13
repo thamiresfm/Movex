@@ -174,6 +174,17 @@ pub async fn connect_to_peer(
     addr: String,
     port: u16,
 ) -> Result<(), String> {
+    // Validar entrada vinda do frontend antes de iniciar qualquer conexão.
+    // port != 0 e endereço não vazio / sem espaços internos.
+    let addr_trim = addr.trim();
+    if port == 0 || addr_trim.is_empty() || addr_trim.split_whitespace().count() != 1 {
+        tracing::warn!(
+            "connect_to_peer: entrada inválida (addr ou port)"
+        );
+        return Err("Endereço ou porta inválidos".to_string());
+    }
+    let addr = addr_trim.to_string();
+
     // Guardar endereço de sessão sem persistir
     { *state.session_server_addr.lock().await = Some((addr.clone(), port)); }
 
